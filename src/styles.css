@@ -11,14 +11,24 @@
 
 * { box-sizing: border-box; }
 
+html, body, #root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--bg);
   color: var(--text);
+  overflow: hidden; /* the terminal scrolls internally, not the whole page */
 }
 
-.app { min-height: 100vh; display: flex; flex-direction: column; }
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
 .app-header {
   padding: 14px 20px;
@@ -34,9 +44,11 @@ body {
   flex: 1;
   display: grid;
   grid-template-columns: 1fr 340px;
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
   padding: 16px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .app-side {
