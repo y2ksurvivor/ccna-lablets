@@ -41,15 +41,28 @@ export class CLI {
   execute(line) {
     const raw = line.trim()
     if (raw === '') return []
-    if (raw === '?') return this.helpTokens([]).map(h => `  ${pad(h.name)} ${h.help}`)
+    if (raw === '?') return formatHelp(this.helpTokens([]))
 
     // trailing ? -> context help
     if (raw.endsWith('?')) {
       const partial = raw.slice(0, -1)
       const toks = tokenize(partial)
       const endsSpace = /\s$/.test(partial) || partial === ''
-      return this.helpTokens(endsSpace ? toks : toks.slice(0, -1), endsSpace ? '' : toks[toks.length - 1])
-        .map(h => `  ${pad(h.name)} ${h.help}`)
+      const prefix = endsSpace ? toks : toks.slice(0, -1)
+      const partialWord = endsSpace ? '' : (toks[toks.length - 1] || '')
+
+      // If a command word is already typed, it must be valid before we can
+      // offer help for its arguments — otherwise IOS flags the bad token.
+      if (prefix.length > 0) {
+        const table = COMMANDS[this.mode] || {}
+        const m = matchCommand(table, prefix[0])
+        if (m.error) return this.renderMatchError(m, raw)
+      }
+
+      const entries = this.helpTokens(prefix, partialWord)
+      // Word help with no matches (e.g. "xyz?") is an invalid token in IOS.
+      if (entries.length === 0 && partialWord) return this.caretError(raw, partialWord)
+      return formatHelp(entries)
     }
 
     const tokens = tokenize(raw)
@@ -58,21 +71,36 @@ export class CLI {
       if (tokens[0] === 'do') {
         const saved = this.mode
         this.mode = 'enable'
-        const out = this.dispatch(tokens.slice(1))
+        const out = this.dispatch(tokens.slice(1), tokens.slice(1).join(' '))
         this.mode = saved
         return out
       }
     }
-    return this.dispatch(tokens)
+    return this.dispatch(tokens, raw)
   }
 
-  dispatch(tokens) {
+  dispatch(tokens, raw) {
     if (tokens.length === 0) return []
     const table = COMMANDS[this.mode] || {}
     const match = matchCommand(table, tokens[0])
-    if (match.error) return [match.error]
+    if (match.error) return this.renderMatchError(match, raw ?? tokens.join(' '))
     const cmd = table[match.name]
     return cmd.run(this, tokens.slice(1), tokens)
+  }
+
+  // Render a typed match error the way IOS does. For an invalid token we print
+  // a caret line under the offending token, aligned to the on-screen prompt.
+  renderMatchError(match, raw) {
+    if (match.error === 'ambiguous') {
+      return [`% Ambiguous command:  "${match.token}"`]
+    }
+    return this.caretError(raw, match.token)
+  }
+
+  caretError(raw, token) {
+    const idx = token != null ? raw.indexOf(token) : Math.max(0, raw.length - 1)
+    const col = this.prompt().length + (idx < 0 ? 0 : idx)
+    return [`${' '.repeat(col)}^`, `% Invalid input detected at '^' marker.`]
   }
 
   // Help entries available at current position.
@@ -91,7 +119,7 @@ export class CLI {
     }
 
     const match = matchCommand(table, prefixTokens[0])
-    if (match.error) return [{ name: '', help: match.error }]
+    if (match.error) return [] // execute() validates and renders errors before calling us
     const cmd = table[match.name]
     const restArgs = prefixTokens.slice(1)
 
@@ -388,15 +416,25 @@ function tokenize(line) {
 }
 
 // Match a possibly-abbreviated token against a command table's keys.
+// On failure returns a typed error the caller renders IOS-style:
+//   'invalid'   -> caret line + "% Invalid input detected at '^' marker."
+//   'ambiguous' -> "% Ambiguous command:  "<token>""
 function matchCommand(table, token) {
   const keys = Object.keys(table).filter(k => k !== '?')
   if (keys.includes(token)) return { name: token }
   const hits = keys.filter(k => k.startsWith(token))
   if (hits.length === 1) return { name: hits[0] }
-  if (hits.length === 0) return { error: `% Invalid input detected at '^' marker.` }
-  return { error: `% Ambiguous command:  "${token}"` }
+  if (hits.length === 0) return { error: 'invalid', token }
+  return { error: 'ambiguous', token }
 }
 
 function pad(s, n = 18) {
   return (s + ' '.repeat(n)).slice(0, n)
+}
+
+// Format help entries for display. `<cr>` prints alone (no padding column).
+function formatHelp(entries) {
+  return entries.map(h =>
+    h.name === '<cr>' ? '  <cr>' : `  ${pad(h.name)} ${h.help}`.trimEnd()
+  )
 }
