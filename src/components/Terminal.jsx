@@ -18,6 +18,7 @@ export default function Terminal({ cli, deviceName }) {
   function run(cmd) {
     const promptStr = cli.prompt()
     const echoed = `${promptStr}${cmd}`
+    const isHelp = cmd.trim().endsWith('?')
     let out = []
     try {
       out = cli.execute(cmd)
@@ -25,14 +26,21 @@ export default function Terminal({ cli, deviceName }) {
       out = [`% engine error: ${e.message}`]
     }
     setLines(prev => [...prev, echoed, ...out])
-    if (cmd.trim()) setHistory(prev => [...prev, cmd])
+    // Help queries aren't real commands — keep them out of history.
+    if (cmd.trim() && !isHelp) setHistory(prev => [...prev, cmd])
     setHistIdx(-1)
   }
 
   function onKeyDown(e) {
     if (e.key === 'Enter') {
       run(input)
-      setInput('')
+      // After a `?` help query, IOS redisplays what you typed (minus the ?)
+      // so you can keep completing the line.
+      if (input.trim().endsWith('?')) {
+        setInput(input.slice(0, input.lastIndexOf('?')))
+      } else {
+        setInput('')
+      }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       if (history.length === 0) return

@@ -76,16 +76,34 @@ export class CLI {
   }
 
   // Help entries available at current position.
+  //   prefixTokens = fully-typed tokens before the partial word
+  //   partial      = the word currently being typed (may be '')
+  // With no prefix, list matching commands for the mode. With a command already
+  // typed, delegate to that command's argHelp(cli, restArgs) for the next token.
   helpTokens(prefixTokens, partial = '') {
-    // Only top-level help implemented for the slice; deeper arg help comes later.
     const table = COMMANDS[this.mode] || {}
-    const entries = Object.entries(table)
-      .filter(([name]) => name.startsWith(partial))
-      .map(([name, c]) => ({ name, help: c.help || '' }))
-    if (this.mode !== 'user' && '<cr>'.startsWith(partial) && prefixTokens.length > 0) {
-      // noop
+
+    if (prefixTokens.length === 0) {
+      return Object.entries(table)
+        .filter(([name]) => name !== '?' && name.startsWith(partial))
+        .map(([name, c]) => ({ name, help: c.help || '' }))
+        .sort((a, b) => a.name.localeCompare(b.name))
     }
-    return entries.sort((a, b) => a.name.localeCompare(b.name))
+
+    const match = matchCommand(table, prefixTokens[0])
+    if (match.error) return [{ name: '', help: match.error }]
+    const cmd = table[match.name]
+    const restArgs = prefixTokens.slice(1)
+
+    let entries
+    if (cmd.argHelp) {
+      entries = cmd.argHelp(this, restArgs)
+    } else {
+      entries = [{ name: '<cr>', help: '' }]
+    }
+    return entries
+      .filter(e => e.name === '<cr>' ? partial === '' : e.name.startsWith(partial))
+      .sort((a, b) => a.name.localeCompare(b.name))
   }
 
   // Tab / space completion for a partial token.
@@ -115,8 +133,8 @@ const COMMANDS = {
       help: 'Turn on privileged commands',
       run: (cli) => { cli.mode = 'enable'; return [] },
     },
-    ping: { help: 'Send echo messages', run: (cli, a) => pingCmd(cli, a) },
-    show: { help: 'Show running system information', run: (cli, a) => showCmd(cli, a) },
+    ping: { help: 'Send echo messages', argHelp: pingArgHelp, run: (cli, a) => pingCmd(cli, a) },
+    show: { help: 'Show running system information', argHelp: showArgHelp, run: (cli, a) => showCmd(cli, a) },
     exit: { help: 'Exit from the EXEC', run: () => [] },
     '?': { help: 'Help', run: () => [] },
   },
@@ -125,14 +143,15 @@ const COMMANDS = {
     disable: { help: 'Turn off privileged commands', run: (cli) => { cli.mode = 'user'; return [] } },
     configure: {
       help: 'Enter configuration mode',
+      argHelp: () => [{ name: 'terminal', help: 'Configure from the terminal' }],
       run: (cli, a) => {
         if (a[0] && !'terminal'.startsWith(a[0])) return ['% Invalid input']
         cli.mode = 'config'
         return ['Enter configuration commands, one per line.  End with CNTL/Z.']
       },
     },
-    show: { help: 'Show running system information', run: (cli, a) => showCmd(cli, a) },
-    ping: { help: 'Send echo messages', run: (cli, a) => pingCmd(cli, a) },
+    show: { help: 'Show running system information', argHelp: showArgHelp, run: (cli, a) => showCmd(cli, a) },
+    ping: { help: 'Send echo messages', argHelp: pingArgHelp, run: (cli, a) => pingCmd(cli, a) },
     write: { help: 'Save configuration', run: (cli) => { cli.dev.startupConfig = true; return ['Building configuration...', '[OK]'] } },
     copy: {
       help: 'Copy running-config',
@@ -144,6 +163,7 @@ const COMMANDS = {
   config: {
     hostname: {
       help: 'Set system network name',
+      argHelp: () => [{ name: 'WORD', help: 'This system\'s network name' }],
       run: (cli, a) => {
         if (!a[0]) return ['% Incomplete command.']
         cli.dev.hostname = a[0]
@@ -152,6 +172,7 @@ const COMMANDS = {
     },
     interface: {
       help: 'Select an interface to configure',
+      argHelp: interfaceArgHelp,
       run: (cli, a) => {
         const canon = canonicalIface(a.join(''))
         if (!canon) return ['% Invalid interface']
@@ -162,6 +183,7 @@ const COMMANDS = {
     },
     vlan: {
       help: 'Configure VLAN',
+      argHelp: () => [{ name: '<1-4094>', help: 'ISL VLAN IDs 1-4094' }],
       run: (cli, a) => {
         if (cli.dev.kind !== 'switch') return ['% Invalid input detected']
         const id = parseInt(a[0], 10)
@@ -174,6 +196,9 @@ const COMMANDS = {
     },
     'enable': {
       help: 'Modify enable password parameters',
+      argHelp: (cli, a) => a.length === 0
+        ? [{ name: 'secret', help: 'Assign the privileged level secret' }]
+        : [{ name: 'WORD', help: 'The enable secret' }],
       run: (cli, a) => {
         if (a[0] === 'secret') { cli.dev.enableSecret = a.slice(1).join(' '); return [] }
         return ['% Incomplete command.']
@@ -181,6 +206,15 @@ const COMMANDS = {
     },
     'ip': {
       help: 'Global IP configuration',
+      argHelp: (cli, a) => {
+        if (a.length === 0) return [{ name: 'route', help: 'Establish static routes' }]
+        if (a[0] === 'route') {
+          if (a.length === 1) return [{ name: 'A.B.C.D', help: 'Destination prefix' }]
+          if (a.length === 2) return [{ name: 'A.B.C.D', help: 'Destination prefix mask' }]
+          if (a.length === 3) return [{ name: 'A.B.C.D', help: 'Forwarding router\'s address' }]
+        }
+        return [{ name: '<cr>', help: '' }]
+      },
       run: (cli, a) => ipConfigCmd(cli, a),
     },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
@@ -191,6 +225,14 @@ const COMMANDS = {
   iface: {
     'ip': {
       help: 'Interface IP config',
+      argHelp: (cli, a) => {
+        if (a.length === 0) return [{ name: 'address', help: 'Set the IP address of an interface' }]
+        if (a[0] === 'address') {
+          if (a.length === 1) return [{ name: 'A.B.C.D', help: 'IP address' }]
+          if (a.length === 2) return [{ name: 'A.B.C.D', help: 'IP subnet mask' }]
+        }
+        return [{ name: '<cr>', help: '' }]
+      },
       run: (cli, a) => {
         if (a[0] === 'address') {
           const [ip, mask] = [a[1], a[2]]
@@ -202,9 +244,9 @@ const COMMANDS = {
         return ['% Invalid input detected']
       },
     },
-    'description': { help: 'Interface description', run: (cli, a) => { cli.ctx.iface.description = a.join(' '); return [] } },
+    'description': { help: 'Interface description', argHelp: () => [{ name: 'LINE', help: 'Up to 240 characters describing this interface' }], run: (cli, a) => { cli.ctx.iface.description = a.join(' '); return [] } },
     'shutdown': { help: 'Shut down interface', run: (cli) => { cli.ctx.iface.shutdown = true; cli.ctx.iface.lineProtocol = false; return [] } },
-    'switchport': { help: 'Set switching mode', run: (cli, a) => switchportCmd(cli, a) },
+    'switchport': { help: 'Set switching mode', argHelp: switchportArgHelp, run: (cli, a) => switchportCmd(cli, a) },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
     exit: { help: 'Exit interface config', run: (cli) => { cli.mode = 'config'; return [] } },
     end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
@@ -225,6 +267,60 @@ const COMMANDS = {
     exit: { help: 'Exit router config', run: (cli) => { cli.mode = 'config'; return [] } },
     end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
   },
+}
+
+// --- argument help providers -------------------------------------------------
+// Each returns the list of valid NEXT tokens given the args already typed.
+
+function showArgHelp(cli, a) {
+  if (a.length === 0) {
+    const opts = [
+      { name: 'running-config', help: 'Current operating configuration' },
+      { name: 'ip', help: 'IP information' },
+      { name: 'version', help: 'System hardware and software status' },
+    ]
+    if (cli.dev.kind === 'switch') opts.push({ name: 'vlan', help: 'VTP VLAN status' })
+    return opts
+  }
+  if (a[0] === 'ip') {
+    if (a.length === 1) return [
+      { name: 'interface', help: 'IP interface status and configuration' },
+      { name: 'route', help: 'IP routing table' },
+    ]
+    if (a[1] === 'interface') return [{ name: 'brief', help: 'Brief summary of IP status' }]
+  }
+  return [{ name: '<cr>', help: '' }]
+}
+
+function pingArgHelp() {
+  return [{ name: 'A.B.C.D', help: 'Ping destination address' }]
+}
+
+function interfaceArgHelp(cli) {
+  const types = [
+    { name: 'GigabitEthernet', help: 'GigabitEthernet IEEE 802.3z' },
+    { name: 'FastEthernet', help: 'FastEthernet IEEE 802.3' },
+    { name: 'Loopback', help: 'Loopback interface' },
+  ]
+  if (cli.dev.kind === 'router') types.push({ name: 'Serial', help: 'Serial interface' })
+  if (cli.dev.kind === 'switch') types.push({ name: 'Vlan', help: 'Catalyst VLANs' })
+  return types
+}
+
+function switchportArgHelp(cli, a) {
+  if (a.length === 0) return [
+    { name: 'mode', help: 'Set trunking mode of the interface' },
+    { name: 'access', help: 'Set access mode characteristics' },
+  ]
+  if (a[0] === 'mode') return [
+    { name: 'access', help: 'Set trunking mode to ACCESS unconditionally' },
+    { name: 'trunk', help: 'Set trunking mode to TRUNK unconditionally' },
+  ]
+  if (a[0] === 'access') {
+    if (a.length === 1) return [{ name: 'vlan', help: 'Set VLAN when interface is in access mode' }]
+    if (a[1] === 'vlan') return [{ name: '<1-4094>', help: 'VLAN ID of the VLAN when this port is in access mode' }]
+  }
+  return [{ name: '<cr>', help: '' }]
 }
 
 // --- command handlers --------------------------------------------------------
