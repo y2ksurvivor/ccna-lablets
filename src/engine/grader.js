@@ -23,6 +23,15 @@ export function scorePct(results) {
 // --- reusable check helpers --------------------------------------------------
 
 import { getInterface, canonicalIface } from './device.js'
+import { renderRunningConfig } from './show.js'
+
+// True when the device has been saved AND nothing changed since (running config
+// matches the saved snapshot). Never-saved devices return false.
+export function isSaved(net, devId) {
+  const d = net.devices[devId]
+  if (!d || d.savedConfig == null) return false
+  return d.savedConfig === renderRunningConfig(d).join('\n')
+}
 
 export function vlanExists(net, devId, id) {
   const d = net.devices[devId]

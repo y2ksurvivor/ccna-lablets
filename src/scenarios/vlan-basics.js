@@ -12,7 +12,7 @@ import { createNetwork, addDevice, addLink, ping } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { vlanExists, portAccessVlan, portIsTrunk } from '../engine/grader.js'
+import { vlanExists, portAccessVlan, portIsTrunk, isSaved } from '../engine/grader.js'
 
 export const vlanBasics = {
   id: 'vlan-basics',
@@ -126,6 +126,13 @@ export const vlanBasics = {
         portAccessVlan(net, 'SW1', 'gi0/2') === 20 &&
         portAccessVlan(net, 'SW2', 'gi0/2') === 20 &&
         ping(net, 'PC3', '192.168.20.40').ok,
+    },
+    {
+      id: 'save',
+      text: 'Save the configuration on both SW1 and SW2 (do this last)',
+      hint: 'SW1# write memory   (or: wr / save / copy running-config startup-config)',
+      // Goes red again if you edit after saving — so save once you are done.
+      check: (net) => isSaved(net, 'SW1') && isSaved(net, 'SW2'),
     },
   ],
 }

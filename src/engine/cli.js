@@ -181,10 +181,33 @@ const COMMANDS = {
     },
     show: { help: 'Show running system information', argHelp: showArgHelp, run: (cli, a) => showCmd(cli, a) },
     ping: { help: 'Send echo messages', argHelp: pingArgHelp, run: (cli, a) => pingCmd(cli, a) },
-    write: { help: 'Save configuration', run: (cli) => { cli.dev.startupConfig = true; return ['Building configuration...', '[OK]'] } },
+    write: {
+      help: 'Write running configuration to memory',
+      argHelp: () => [{ name: 'memory', help: 'Write to NV memory' }, { name: 'erase', help: 'Erase NV memory' }],
+      run: (cli, a) => {
+        if (a[0] && 'erase'.startsWith(a[0])) { cli.dev.savedConfig = null; return ['Erasing the nvram filesystem...', '[OK]'] }
+        saveConfig(cli)
+        return ['Building configuration...', '[OK]']
+      },
+    },
+    // `save` is not classic IOS, but accepted here as a friendly alias for write.
+    save: {
+      help: 'Save running configuration (alias for write memory)',
+      run: (cli) => { saveConfig(cli); return ['Building configuration...', '[OK]'] },
+    },
     copy: {
-      help: 'Copy running-config',
-      run: (cli, a) => { cli.dev.startupConfig = true; return ['Destination filename [startup-config]?', 'Building configuration...', '[OK]'] },
+      help: 'Copy from one file to another',
+      argHelp: (cli, a) => a.length === 0
+        ? [{ name: 'running-config', help: 'Copy from current system configuration' }]
+        : [{ name: 'startup-config', help: 'Copy to startup configuration' }],
+      run: (cli, a) => {
+        // copy running-config startup-config
+        if ((a[0] || '').startsWith('run') && (a[1] || '').startsWith('start')) {
+          saveConfig(cli)
+          return ['Destination filename [startup-config]?', 'Building configuration...', '[OK]']
+        }
+        return ['% Incomplete command.']
+      },
     },
     exit: { help: 'Exit from the EXEC', run: (cli) => { cli.mode = 'user'; return [] } },
   },
@@ -363,6 +386,13 @@ function switchportArgHelp(cli, a) {
 }
 
 // --- command handlers --------------------------------------------------------
+
+// Snapshot running-config into savedConfig. Grading compares this snapshot to
+// the live running-config, so saving after further edits is required to stay
+// "saved" — exactly like copy run start on a real box.
+function saveConfig(cli) {
+  cli.dev.savedConfig = renderRunningConfig(cli.dev).join('\n')
+}
 
 function negate(cli, a) {
   if (cli.mode === 'iface') {

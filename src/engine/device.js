@@ -53,8 +53,10 @@ export function createDevice(opts = {}) {
     enableSecret: null,
     lines: { console: {}, vty: {} },
     banner: null,
-    // Runtime
-    startupConfig: null,
+    // Runtime. savedConfig is a snapshot of running-config taken at the last
+    // write/copy; null means "never saved". The grader compares it to the
+    // current running-config to know whether unsaved changes exist.
+    savedConfig: null,
   }
 }
 
