@@ -4,6 +4,36 @@
 // grader inspects this object, never the user's keystrokes.
 
 let idCounter = 0
+let macCounter = 0
+
+// Deterministic MAC so scenarios are reproducible (no Math.random).
+export function nextMac() {
+  macCounter += 1
+  const n = macCounter
+  const hex = n.toString(16).padStart(4, '0')
+  return `0050.56${hex.slice(0, 2)}.${hex.slice(2)}${hex.slice(0, 2)}`
+}
+
+export function resetCounters() {
+  idCounter = 0
+  macCounter = 0
+}
+
+// A host/PC endpoint. Not a full IOS device — just enough to originate pings
+// and answer ARP/ICMP so connectivity lablets can be graded and verified.
+export function createHost(opts = {}) {
+  return {
+    id: opts.id || `host${++idCounter}`,
+    kind: 'host',
+    hostname: opts.hostname || 'PC',
+    mac: opts.mac || nextMac(),
+    ip: opts.ip || null,
+    mask: opts.mask || null,
+    gateway: opts.gateway || null,
+    // The single NIC name hosts present, for link wiring.
+    nic: opts.nic || 'NIC',
+  }
+}
 
 export function createDevice(opts = {}) {
   const kind = opts.kind || 'router' // 'router' | 'switch'
@@ -37,15 +67,19 @@ export function getInterface(dev, name) {
     dev.interfaces[canon] = {
       name: canon,
       shortName: shortIface(canon),
+      mac: nextMac(),
       ip: null,
       mask: null,
-      shutdown: true, // routers default admin-down
+      // Switch access ports come up by default; router ports are admin-down.
+      shutdown: dev.kind !== 'switch',
       description: null,
       // switchport
       mode: dev.kind === 'switch' ? 'access' : null, // 'access' | 'trunk'
       accessVlan: dev.kind === 'switch' ? 1 : null,
-      trunkVlans: null,
+      trunkNativeVlan: dev.kind === 'switch' ? 1 : null,
+      trunkAllowed: 'all', // 'all' | array of vlan ids
       // link
+      connected: false, // set true when a link is attached
       lineProtocol: false,
     }
   }

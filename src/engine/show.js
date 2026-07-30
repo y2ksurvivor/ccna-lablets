@@ -18,10 +18,13 @@ export function renderRunningConfig(dev) {
     out.push(`interface ${ifc.name}`)
     if (ifc.description) out.push(` description ${ifc.description}`)
     if (dev.kind === 'switch') {
-      if (ifc.mode === 'trunk') out.push(' switchport mode trunk')
-      else if (ifc.mode === 'access') {
-        out.push(' switchport mode access')
+      if (ifc.mode === 'trunk') {
+        if (ifc.trunkNativeVlan && ifc.trunkNativeVlan !== 1) out.push(` switchport trunk native vlan ${ifc.trunkNativeVlan}`)
+        if (Array.isArray(ifc.trunkAllowed)) out.push(` switchport trunk allowed vlan ${ifc.trunkAllowed.join(',')}`)
+        out.push(' switchport mode trunk')
+      } else if (ifc.mode === 'access') {
         if (ifc.accessVlan && ifc.accessVlan !== 1) out.push(` switchport access vlan ${ifc.accessVlan}`)
+        out.push(' switchport mode access')
       }
     }
     if (ifc.ip) out.push(` ip address ${ifc.ip} ${ifc.mask}`)

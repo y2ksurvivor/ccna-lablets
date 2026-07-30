@@ -1,41 +1,104 @@
-import { useMemo } from 'react'
+import { useState, useCallback } from 'react'
 import Terminal from './components/Terminal.jsx'
-import { createDevice } from './engine/device.js'
-import { CLI } from './engine/cli.js'
+import TopologyView from './components/TopologyView.jsx'
+import TaskPanel from './components/TaskPanel.jsx'
+import { getScenario, scenarios } from './scenarios/index.js'
+import { grade, scorePct } from './engine/grader.js'
 
-// Phase 0/1 vertical slice: a single switch console you can actually configure.
-// Multi-device topology + task panel arrive in Phases 2–3.
+function initBuffers(sim) {
+  const b = {}
+  for (const id of Object.keys(sim.consoles)) {
+    b[id] = [`${id} console — press a key and start typing.`, '']
+  }
+  return b
+}
+function initHistories(sim) {
+  const h = {}
+  for (const id of Object.keys(sim.consoles)) h[id] = []
+  return h
+}
+
 export default function App() {
-  const cli = useMemo(() => {
-    const sw = createDevice({ kind: 'switch', hostname: 'Switch' })
-    return new CLI(sw)
-  }, [])
+  const [scenarioId, setScenarioId] = useState(scenarios[0].id)
+  const scenario = getScenario(scenarioId)
+
+  const [sim, setSim] = useState(() => scenario.build())
+  const deviceIds = Object.keys(sim.consoles)
+  const [active, setActive] = useState(deviceIds[0])
+  const [buffers, setBuffers] = useState(() => initBuffers(sim))
+  const [histories, setHistories] = useState(() => initHistories(sim))
+  const [results, setResults] = useState(() => grade(scenario, sim.net))
+
+  const runCommand = useCallback((devId, cmd) => {
+    const cli = sim.consoles[devId]
+    const echoed = `${cli.prompt()}${cmd}`
+    let out = []
+    try {
+      out = cli.execute(cmd)
+    } catch (e) {
+      out = [`% engine error: ${e.message}`]
+    }
+    setBuffers(b => ({ ...b, [devId]: [...b[devId], echoed, ...out] }))
+    if (cmd.trim() && !cmd.trim().endsWith('?')) {
+      setHistories(h => ({ ...h, [devId]: [...h[devId], cmd] }))
+    }
+    setResults(grade(scenario, sim.net))
+  }, [sim, scenario])
+
+  function reset() {
+    const s = scenario.build()
+    setSim(s)
+    setActive(Object.keys(s.consoles)[0])
+    setBuffers(initBuffers(s))
+    setHistories(initHistories(s))
+    setResults(grade(scenario, s.net))
+  }
+
+  const cli = sim.consoles[active]
 
   return (
     <div className="app">
       <header className="app-header">
         <h1>CCNA Lablets</h1>
-        <span className="app-sub">Cisco CLI simulator · Phase 1 vertical slice</span>
+        <select className="scenario-select" value={scenarioId}
+          onChange={e => setScenarioId(e.target.value)}>
+          {scenarios.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+        </select>
+        <span className="app-spacer" />
+        <button className="btn" onClick={reset}>Reset lab</button>
       </header>
+
       <main className="app-main">
-        <Terminal cli={cli} deviceName="Switch" />
-        <aside className="app-side">
-          <h2>Try it</h2>
-          <p>The CLI is live and mutates real device state. Try:</p>
-          <pre>{`enable
-configure terminal
-hostname SW1
-vlan 10
- name SALES
-exit
-interface gi0/1
- switchport mode access
- switchport access vlan 10
-exit
-do show vlan
-do show run`}</pre>
-          <p className="muted">Abbreviations (<code>conf t</code>, <code>int gi0/1</code>),
-          <code> ?</code> help, Tab completion, and command history all work.</p>
+        <div className="left-col">
+          <TopologyView layout={sim.layout} devices={sim.net.devices}
+            active={active} onSelect={setActive} />
+
+          <div className="device-tabs">
+            {deviceIds.map(id => (
+              <button key={id}
+                className={`tab ${id === active ? 'active' : ''} tab-${sim.net.devices[id]?.kind}`}
+                onClick={() => setActive(id)}>
+                {id}
+              </button>
+            ))}
+          </div>
+
+          <Terminal
+            key={active}
+            prompt={cli.prompt()}
+            lines={buffers[active]}
+            history={histories[active]}
+            onSubmit={cmd => runCommand(active, cmd)}
+            complete={cli.complete ? (line => cli.complete(line)) : null}
+          />
+        </div>
+
+        <aside className="right-col">
+          <div className="intro">
+            <h2>{scenario.title}</h2>
+            <pre className="intro-text">{scenario.intro.join('\n')}</pre>
+          </div>
+          <TaskPanel scenario={scenario} results={results} score={scorePct(results)} />
         </aside>
       </main>
     </div>

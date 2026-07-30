@@ -17,8 +17,9 @@ import { getInterface, canonicalIface, shortIface } from './device.js'
 import { renderRunningConfig, renderIpIntBrief, renderVlanBrief } from './show.js'
 
 export class CLI {
-  constructor(device) {
+  constructor(device, net = null) {
     this.dev = device
+    this.net = net // optional Network reference, enables ping/connectivity
     this.mode = 'user'
     this.ctx = {} // sub-config context (e.g. current interface)
   }
@@ -339,6 +340,7 @@ function switchportArgHelp(cli, a) {
   if (a.length === 0) return [
     { name: 'mode', help: 'Set trunking mode of the interface' },
     { name: 'access', help: 'Set access mode characteristics' },
+    { name: 'trunk', help: 'Set trunking characteristics of the interface' },
   ]
   if (a[0] === 'mode') return [
     { name: 'access', help: 'Set trunking mode to ACCESS unconditionally' },
@@ -347,6 +349,15 @@ function switchportArgHelp(cli, a) {
   if (a[0] === 'access') {
     if (a.length === 1) return [{ name: 'vlan', help: 'Set VLAN when interface is in access mode' }]
     if (a[1] === 'vlan') return [{ name: '<1-4094>', help: 'VLAN ID of the VLAN when this port is in access mode' }]
+  }
+  if (a[0] === 'trunk') {
+    if (a.length === 1) return [
+      { name: 'native', help: 'Set trunking native characteristics' },
+      { name: 'allowed', help: 'Set allowed VLAN characteristics' },
+    ]
+    if (a[1] === 'native') return [{ name: 'vlan', help: 'Set native VLAN when interface is in trunking mode' }]
+    if (a[1] === 'allowed') return [{ name: 'vlan', help: 'Set allowed VLANs when interface is in trunking mode' }]
+    if (a[2] === 'vlan') return [{ name: '<1-4094>', help: 'VLAN IDs of the allowed/native VLANs' }]
   }
   return [{ name: '<cr>', help: '' }]
 }
@@ -367,12 +378,28 @@ function switchportCmd(cli, a) {
   if (a[0] === 'mode') {
     if (a[1] === 'access') { ifc.mode = 'access'; return [] }
     if (a[1] === 'trunk') { ifc.mode = 'trunk'; return [] }
+    return ['% Incomplete command.']
   }
   if (a[0] === 'access' && a[1] === 'vlan') {
     const id = parseInt(a[2], 10)
     if (!id) return ['% Incomplete command.']
     ifc.accessVlan = id
     return []
+  }
+  if (a[0] === 'trunk') {
+    if (a[1] === 'native' && a[2] === 'vlan') {
+      const id = parseInt(a[3], 10)
+      if (!id) return ['% Incomplete command.']
+      ifc.trunkNativeVlan = id
+      return []
+    }
+    if (a[1] === 'allowed' && a[2] === 'vlan') {
+      const list = a[3]
+      if (!list) return ['% Incomplete command.']
+      ifc.trunkAllowed = list.split(',').map(s => parseInt(s, 10)).filter(Boolean)
+      return []
+    }
+    return ['% Incomplete command.']
   }
   return ['% Invalid input detected']
 }
@@ -402,11 +429,31 @@ function showCmd(cli, a) {
   return ['% Invalid input detected']
 }
 
+// Device-sourced ping. Switches/routers need an IP interface in the target's
+// subnet to source the echo; full L3 device ping (routing table lookup) lands
+// in the IP Connectivity phase. For now, verify VLAN lablets from the PCs.
+function pingFromDevice(net, dev, target) {
+  return { ok: false, reason: 'device-sourced ping arrives with the routing phase' }
+}
+
 function pingCmd(cli, a) {
   const target = a[0]
   if (!target) return ['% Incomplete command.']
-  // Phase 1 stub — real reachability lands in Phase 2 (network engine).
-  return [`Type escape sequence to abort.`, `Sending 5, 100-byte ICMP Echos to ${target}, timeout is 2 seconds:`, `.....`, `Success rate is 0 percent (0/5)  [reachability sim arrives in Phase 2]`]
+  const header = [
+    `Type escape sequence to abort.`,
+    `Sending 5, 100-byte ICMP Echos to ${target}, timeout is 2 seconds:`,
+  ]
+  if (!cli.net) {
+    return [...header, `.....`, `Success rate is 0 percent (0/5)`]
+  }
+  // A switch/router pings from itself. We approximate by treating any device
+  // interface IP in the destination's subnet as the source. Full L3 ping from
+  // network devices comes with the routing phase; hosts use the host console.
+  const res = pingFromDevice(cli.net, cli.dev, target)
+  const marks = res.ok ? '!!!!!' : '.....'
+  const pct = res.ok ? 100 : 0
+  const n = res.ok ? '5/5' : '0/5'
+  return [...header, marks, `Success rate is ${pct} percent (${n})`]
 }
 
 // --- parsing utilities -------------------------------------------------------
