@@ -4,7 +4,7 @@ import TopologyView from './components/TopologyView.jsx'
 import TaskPanel from './components/TaskPanel.jsx'
 import { getScenario, scenarios } from './scenarios/index.js'
 import { grade, scorePct } from './engine/grader.js'
-import { getCompletions, bumpCompletions, resetCompletions } from './storage.js'
+import { getCompletions, bumpCompletions, resetCompletions, getHintsEnabled, setHintsEnabled } from './storage.js'
 
 function initBuffers(sim) {
   const b = {}
@@ -30,6 +30,13 @@ export default function App() {
   const [histories, setHistories] = useState(() => initHistories(sim))
   const [results, setResults] = useState(() => grade(scenario, sim.net))
   const [completions, setCompletions] = useState(() => getCompletions(scenarioId))
+  const [hintsEnabled, setHints] = useState(() => getHintsEnabled())
+
+  function toggleHints() {
+    const next = !hintsEnabled
+    setHints(next)
+    setHintsEnabled(next)
+  }
   // Whether the current attempt already counted, so re-hitting 100% (e.g. after
   // editing then re-saving) doesn't inflate the count. Reset by "Reset lab".
   const countedRef = useRef(false)
@@ -94,6 +101,10 @@ export default function App() {
           {scenarios.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
         </select>
         <span className="app-spacer" />
+        <button className={`btn mode-toggle ${hintsEnabled ? 'study' : 'exam'}`} onClick={toggleHints}
+          title="Study mode shows hints; Exam mode hides them">
+          {hintsEnabled ? '📖 Study mode' : '📝 Exam mode'}
+        </button>
         <button className="btn" onClick={reset}>Reset lab</button>
       </header>
 
@@ -128,7 +139,7 @@ export default function App() {
             <pre className="intro-text">{scenario.intro.join('\n')}</pre>
           </div>
           <TaskPanel scenario={scenario} results={results} score={scorePct(results)}
-            completions={completions} onResetCount={resetCount} />
+            completions={completions} onResetCount={resetCount} hintsEnabled={hintsEnabled} />
         </aside>
       </main>
     </div>

@@ -11,7 +11,9 @@ export function grade(scenario, net) {
     } catch (e) {
       error = e.message
     }
-    return { id: t.id, text: t.text, hint: t.hint, pass, error }
+    // hints: [nudge, commands]; fall back to a single-level `hint` if present.
+    const hints = t.hints || (t.hint ? [t.hint] : [])
+    return { id: t.id, text: t.text, hints, pass, error }
   })
 }
 

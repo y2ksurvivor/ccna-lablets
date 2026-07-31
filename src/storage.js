@@ -37,3 +37,22 @@ export function resetCompletions(scenarioId) {
   writeAll(all)
   return 0
 }
+
+// Study mode (hints available) vs Exam mode (hints hidden).
+const MODE_KEY = 'ccna-lablets:hints-enabled'
+
+export function getHintsEnabled() {
+  try {
+    return localStorage.getItem(MODE_KEY) !== 'false' // default: study mode on
+  } catch {
+    return true
+  }
+}
+
+export function setHintsEnabled(on) {
+  try {
+    localStorage.setItem(MODE_KEY, on ? 'true' : 'false')
+  } catch {
+    /* ignore */
+  }
+}

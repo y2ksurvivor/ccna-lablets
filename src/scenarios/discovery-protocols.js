@@ -63,19 +63,21 @@ export const discoveryProtocols = {
     {
       id: 'cdp-fix',
       text: 'Re-enable CDP on SW1 Gi0/1 so SW1 discovers R1',
-      hint: 'SW1(config)# interface gi0/1 → cdp enable',
+      hints: ['CDP was turned off on one interface. Go into that interface and turn it back on.',
+        'interface gi0/1 → cdp enable'],
       check: (net) => discoverySeesNeighbor(net, 'SW1', 'cdp', 'R1'),
     },
     {
       id: 'lldp-on',
       text: 'Enable LLDP globally on SW1 and SW2',
-      hint: 'SW1(config)# lldp run   (repeat on SW2)',
+      hints: ['LLDP is off by default (unlike CDP). Turn it on globally on each switch.',
+        'SW1(config)# lldp run   (repeat on SW2)'],
       check: (net) => globalDiscoveryOn(net, 'SW1', 'lldp') && globalDiscoveryOn(net, 'SW2', 'lldp'),
     },
     {
       id: 'lldp-verify',
       text: 'Verify: SW1 and SW2 see each other as LLDP neighbors',
-      hint: 'SW1# show lldp neighbors',
+      hints: ['Check the LLDP neighbor table on each switch.', 'SW1# show lldp neighbors'],
       check: (net) =>
         discoverySeesNeighbor(net, 'SW1', 'lldp', 'SW2') &&
         discoverySeesNeighbor(net, 'SW2', 'lldp', 'SW1'),
