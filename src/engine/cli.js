@@ -18,6 +18,7 @@ import {
   renderRunningConfig, renderIpIntBrief, renderVlanBrief,
   renderCdpNeighbors, renderLldpNeighbors, renderEtherchannelSummary,
   renderIpRoute, renderOspfNeighbors,
+  renderIpSsh, renderNtpStatus, renderNtpAssociations, renderNatTranslations,
 } from './show.js'
 
 export class CLI {
@@ -38,6 +39,7 @@ export class CLI {
       case 'vlan': return `${h}(config-vlan)#`
       case 'line': return `${h}(config-line)#`
       case 'router': return `${h}(config-router)#`
+      case 'dhcp': return `${h}(dhcp-config)#`
       default: return `${h}>`
     }
   }
@@ -72,7 +74,7 @@ export class CLI {
 
     const tokens = tokenize(raw)
     // `do <cmd>` runs an EXEC command from a config mode
-    if (this.mode.startsWith('config') || ['iface', 'vlan', 'line', 'router'].includes(this.mode)) {
+    if (this.mode.startsWith('config') || ['iface', 'vlan', 'line', 'router', 'dhcp'].includes(this.mode)) {
       if (tokens[0] === 'do') {
         const saved = this.mode
         this.mode = 'enable'
@@ -279,11 +281,22 @@ const COMMANDS = {
     'ip': {
       help: 'Global IP configuration',
       argHelp: (cli, a) => {
-        if (a.length === 0) return [{ name: 'route', help: 'Establish static routes' }]
+        if (a.length === 0) return [
+          { name: 'route', help: 'Establish static routes' },
+          { name: 'domain-name', help: 'Define the default domain name' },
+          { name: 'dhcp', help: 'Configure DHCP server and relay parameters' },
+          { name: 'nat', help: 'NAT configuration commands' },
+        ]
         if (a[0] === 'route') {
           if (a.length === 1) return [{ name: 'A.B.C.D', help: 'Destination prefix' }]
           if (a.length === 2) return [{ name: 'A.B.C.D', help: 'Destination prefix mask' }]
           if (a.length === 3) return [{ name: 'A.B.C.D', help: 'Forwarding router\'s address' }]
+        }
+        if (a[0] === 'dhcp') return [{ name: 'pool', help: 'Configure a DHCP address pool' }, { name: 'excluded-address', help: 'Prevent DHCP from assigning certain addresses' }]
+        if (a[0] === 'nat') {
+          if (a.length === 1) return [{ name: 'inside', help: 'Inside address translation' }, { name: 'pool', help: 'Define a pool of addresses' }]
+          if (a[1] === 'inside') return [{ name: 'source', help: 'Source address translation' }]
+          if (a[2] === 'source') return [{ name: 'static', help: 'Static translation' }, { name: 'list', help: 'Specify access list' }]
         }
         return [{ name: '<cr>', help: '' }]
       },
@@ -304,6 +317,69 @@ const COMMANDS = {
         return []
       },
     },
+    'crypto': {
+      help: 'Encryption module',
+      argHelp: (cli, a) => {
+        if (a.length === 0) return [{ name: 'key', help: 'Long term key operations' }]
+        if (a[0] === 'key') return [{ name: 'generate', help: 'Generate new keys' }]
+        if (a[1] === 'generate') return [{ name: 'rsa', help: 'Generate RSA keys' }]
+        return [{ name: '<cr>', help: '' }]
+      },
+      run: (cli, a) => cryptoCmd(cli, a),
+    },
+    'username': {
+      help: 'Establish user name authentication',
+      argHelp: (cli, a) => a.length === 0
+        ? [{ name: 'WORD', help: 'User name' }]
+        : [{ name: 'secret', help: 'Specify the secret' }, { name: 'password', help: 'Specify the password' }],
+      run: (cli, a) => {
+        const name = a[0]
+        if (!name) return ['% Incomplete command.']
+        const kw = a[1]
+        if (kw !== 'secret' && kw !== 'password' && !(kw && ('secret'.startsWith(kw) || 'password'.startsWith(kw)))) return ['% Incomplete command.']
+        const secret = a.slice(2).join(' ')
+        if (!secret) return ['% Incomplete command.']
+        cli.dev.users = cli.dev.users.filter(u => u.name !== name)
+        cli.dev.users.push({ name, secret })
+        return []
+      },
+    },
+    'line': {
+      help: 'Configure a terminal line',
+      argHelp: (cli, a) => a.length === 0
+        ? [{ name: 'console', help: 'Primary terminal line' }, { name: 'vty', help: 'Virtual terminal' }]
+        : [{ name: '<0-15>', help: 'First line number' }],
+      run: (cli, a) => {
+        const type = a[0]
+        if ('vty'.startsWith(type || 'x')) { cli.ctx.line = ensureLine(cli.dev, 'vty'); cli.mode = 'line' }
+        else if ('console'.startsWith(type || 'x')) { cli.ctx.line = ensureLine(cli.dev, 'console'); cli.mode = 'line' }
+        else return ['% Invalid input detected']
+        return []
+      },
+    },
+    'ntp': {
+      help: 'Configure NTP',
+      argHelp: (cli, a) => a.length === 0
+        ? [{ name: 'master', help: 'Act as NTP master clock' }, { name: 'server', help: 'Configure NTP server' }]
+        : [{ name: 'A.B.C.D', help: 'IP address of peer' }],
+      run: (cli, a) => {
+        if ('master'.startsWith(a[0] || 'x')) { cli.dev.ntp.master = true; cli.dev.ntp.stratum = a[1] ? parseInt(a[1], 10) : 8; return [] }
+        if ('server'.startsWith(a[0] || 'x')) { if (!a[1]) return ['% Incomplete command.']; if (!cli.dev.ntp.servers.includes(a[1])) cli.dev.ntp.servers.push(a[1]); return [] }
+        return ['% Incomplete command.']
+      },
+    },
+    'access-list': {
+      help: 'Add an access list entry',
+      run: (cli, a) => {
+        // access-list <n> permit|deny <src> [wildcard]
+        const id = a[0]
+        const action = a[1]
+        if (!id || !action) return ['% Incomplete command.']
+        if (!cli.dev.acls[id]) cli.dev.acls[id] = []
+        cli.dev.acls[id].push({ action, src: a[2], wildcard: a[3] })
+        return []
+      },
+    },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
     exit: { help: 'Exit config mode', run: (cli) => { cli.mode = 'enable'; return [] } },
     end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
@@ -313,19 +389,37 @@ const COMMANDS = {
     'ip': {
       help: 'Interface IP config',
       argHelp: (cli, a) => {
-        if (a.length === 0) return [{ name: 'address', help: 'Set the IP address of an interface' }]
+        if (a.length === 0) return [
+          { name: 'address', help: 'Set the IP address of an interface' },
+          { name: 'nat', help: 'NAT interface commands' },
+          { name: 'helper-address', help: 'Specify a destination address for UDP broadcasts (DHCP relay)' },
+        ]
         if (a[0] === 'address') {
-          if (a.length === 1) return [{ name: 'A.B.C.D', help: 'IP address' }]
+          if (a.length === 1) return [{ name: 'A.B.C.D', help: 'IP address' }, { name: 'dhcp', help: 'IP Address negotiated via DHCP' }]
           if (a.length === 2) return [{ name: 'A.B.C.D', help: 'IP subnet mask' }]
         }
+        if (a[0] === 'nat') return [{ name: 'inside', help: 'Inside interface for NAT' }, { name: 'outside', help: 'Outside interface for NAT' }]
+        if (a[0] === 'helper-address') return [{ name: 'A.B.C.D', help: 'IP destination address' }]
         return [{ name: '<cr>', help: '' }]
       },
       run: (cli, a) => {
         if (a[0] === 'address') {
+          if (a[1] === 'dhcp') { cli.ctx.iface.addressMode = 'dhcp'; cli.ctx.iface.ip = null; cli.ctx.iface.mask = null; return [] }
           const [ip, mask] = [a[1], a[2]]
           if (!ip || !mask) return ['% Incomplete command.']
           cli.ctx.iface.ip = ip
           cli.ctx.iface.mask = mask
+          cli.ctx.iface.addressMode = 'static'
+          return []
+        }
+        if (a[0] === 'nat') {
+          if (a[1] === 'inside') { cli.ctx.iface.natRole = 'inside'; return [] }
+          if (a[1] === 'outside') { cli.ctx.iface.natRole = 'outside'; return [] }
+          return ['% Incomplete command.']
+        }
+        if (a[0] === 'helper-address') {
+          if (!a[1]) return ['% Incomplete command.']
+          cli.ctx.iface.helperAddress = a[1]
           return []
         }
         return ['% Invalid input detected']
@@ -373,7 +467,36 @@ const COMMANDS = {
   },
 
   line: {
+    'transport': {
+      help: 'Define transport protocols for line',
+      argHelp: (cli, a) => a.length === 0
+        ? [{ name: 'input', help: 'Define which protocols to use when connecting to the terminal server' }, { name: 'output', help: 'Define which protocols to use for outgoing connections' }]
+        : [{ name: 'ssh', help: 'TCP/IP SSH protocol' }, { name: 'telnet', help: 'TCP/IP Telnet protocol' }, { name: 'all', help: 'All protocols' }, { name: 'none', help: 'No protocols' }],
+      run: (cli, a) => {
+        if (a[0] === 'input') { cli.ctx.line.transportInput = a.slice(1); return [] }
+        if (a[0] === 'output') { cli.ctx.line.transportOutput = a.slice(1); return [] }
+        return ['% Incomplete command.']
+      },
+    },
+    'login': {
+      help: 'Enable password checking',
+      argHelp: () => [{ name: 'local', help: 'Local password checking' }, { name: '<cr>', help: '' }],
+      run: (cli, a) => { cli.ctx.line.login = (a[0] && 'local'.startsWith(a[0])) ? 'local' : 'password'; return [] },
+    },
+    'password': { help: 'Set a password', run: (cli, a) => { cli.ctx.line.password = a.join(' '); return [] } },
     exit: { help: 'Exit line config', run: (cli) => { cli.mode = 'config'; return [] } },
+    end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
+  },
+
+  dhcp: {
+    'network': {
+      help: 'Network number and mask',
+      argHelp: (cli, a) => a.length === 0 ? [{ name: 'A.B.C.D', help: 'Network number' }] : [{ name: 'A.B.C.D', help: 'Network mask' }],
+      run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.network = a[0]; cli.ctx.dhcpPool.mask = a[1] || '255.255.255.0'; return [] },
+    },
+    'default-router': { help: 'Default routers', run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.defaultRouter = a[0]; return [] } },
+    'dns-server': { help: 'DNS servers', run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.dnsServer = a[0]; return [] } },
+    exit: { help: 'Exit DHCP pool config', run: (cli) => { cli.mode = 'config'; return [] } },
     end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
   },
 
@@ -419,6 +542,7 @@ function showArgHelp(cli, a) {
       { name: 'ip', help: 'IP information' },
       { name: 'cdp', help: 'CDP information' },
       { name: 'lldp', help: 'LLDP information' },
+      { name: 'ntp', help: 'Network time protocol' },
       { name: 'version', help: 'System hardware and software status' },
     ]
     if (cli.dev.kind === 'switch') {
@@ -432,9 +556,12 @@ function showArgHelp(cli, a) {
       { name: 'interface', help: 'IP interface status and configuration' },
       { name: 'route', help: 'IP routing table' },
       { name: 'ospf', help: 'OSPF information' },
+      { name: 'nat', help: 'NAT information' },
+      { name: 'ssh', help: 'SSH server information' },
     ]
     if (a[1] === 'interface') return [{ name: 'brief', help: 'Brief summary of IP status' }]
     if (a[1] === 'ospf') return [{ name: 'neighbor', help: 'OSPF neighbor list' }]
+    if (a[1] === 'nat') return [{ name: 'translations', help: 'Translation entries' }, { name: 'statistics', help: 'Translation statistics' }]
   }
   if (a[0] === 'cdp') return [{ name: 'neighbors', help: 'CDP neighbor entries' }]
   if (a[0] === 'cdp' && a[1] === 'neighbors') return [{ name: 'detail', help: 'Detailed neighbor information' }]
@@ -567,12 +694,88 @@ function ipConfigCmd(cli, a) {
     const [prefix, mask, nh] = [a[1], a[2], a[3]]
     if (!prefix || !mask || !nh) return ['% Incomplete command.']
     const ad = a[4] ? parseInt(a[4], 10) : 1
-    // De-dup identical routes; a floating static uses a higher AD.
     cli.dev.routes = cli.dev.routes.filter(r => !(r.prefix === prefix && r.mask === mask && r.nextHop === nh))
     cli.dev.routes.push({ proto: 'S', prefix, mask, nextHop: nh, ad, metric: 0 })
     return []
   }
+  // ip domain-name X  /  ip domain name X
+  if (a[0] === 'domain-name') { cli.dev.domainName = a[1] || null; return a[1] ? [] : ['% Incomplete command.'] }
+  if (a[0] === 'domain' && a[1] === 'name') { cli.dev.domainName = a[2] || null; return a[2] ? [] : ['% Incomplete command.'] }
+  if (a[0] === 'ssh') return [] // ip ssh version 2 — accepted
+  // ip dhcp ...
+  if (a[0] === 'dhcp') {
+    if (a[1] === 'pool') {
+      const name = a[2]
+      if (!name) return ['% Incomplete command.']
+      if (!cli.dev.dhcpPools[name]) cli.dev.dhcpPools[name] = { name, network: null, mask: null, defaultRouter: null, dnsServer: null }
+      cli.ctx.dhcpPool = cli.dev.dhcpPools[name]
+      cli.mode = 'dhcp'
+      return []
+    }
+    if (a[1] === 'excluded-address') {
+      if (!a[2]) return ['% Incomplete command.']
+      cli.dev.dhcpExcluded.push(a[2])
+      if (a[3]) cli.dev.dhcpExcluded.push(a[3]) // range end (simplified)
+      return []
+    }
+    return ['% Incomplete command.']
+  }
+  // ip nat ...
+  if (a[0] === 'nat') return ipNatCmd(cli, a.slice(1))
   return ['% Invalid input detected']
+}
+
+function ipNatCmd(cli, a) {
+  // ip nat pool NAME start end netmask MASK
+  if (a[0] === 'pool') {
+    const [name, start, end] = [a[1], a[2], a[3]]
+    if (!name || !start || !end) return ['% Incomplete command.']
+    const mask = (a[4] === 'netmask') ? a[5] : null
+    cli.dev.nat.pools[name] = { name, start, end, mask }
+    return []
+  }
+  // ip nat inside source static <local> <global>
+  // ip nat inside source list <acl> pool <name> [overload]
+  if (a[0] === 'inside' && a[1] === 'source') {
+    if (a[2] === 'static') {
+      const [local, global] = [a[3], a[4]]
+      if (!local || !global) return ['% Incomplete command.']
+      cli.dev.nat.statics.push({ insideLocal: local, insideGlobal: global })
+      return []
+    }
+    if (a[2] === 'list') {
+      const acl = a[3]
+      const poolIdx = a.indexOf('pool')
+      const pool = poolIdx >= 0 ? a[poolIdx + 1] : null
+      const overload = a.includes('overload')
+      if (!acl || !pool) return ['% Incomplete command.']
+      cli.dev.nat.insideSourceLists.push({ acl, pool, overload })
+      return []
+    }
+  }
+  return ['% Invalid input detected']
+}
+
+function cryptoCmd(cli, a) {
+  // crypto key generate rsa [general-keys] [modulus N]
+  if (a[0] === 'key' && a[1] === 'generate' && 'rsa'.startsWith(a[2] || 'x')) {
+    if (!cli.dev.domainName) return ['% Please define a domain-name first.']
+    const modIdx = a.indexOf('modulus')
+    const modulus = modIdx >= 0 ? parseInt(a[modIdx + 1], 10) : 1024
+    cli.dev.rsaKey = { modulus }
+    return [
+      `The name for the keys will be: ${cli.dev.hostname}.${cli.dev.domainName}`,
+      `% The key modulus size is ${modulus} bits`,
+      `% Generating ${modulus} bit RSA keys, keys will be non-exportable...`,
+      '[OK]',
+    ]
+  }
+  return ['% Incomplete command.']
+}
+
+function ensureLine(dev, type) {
+  if (!dev.lines[type]) dev.lines[type] = {}
+  return dev.lines[type]
 }
 
 function networkCmd(cli, a) {
@@ -593,12 +796,25 @@ function showCmd(cli, a) {
   if (sub === 'ip') {
     const s2 = (a[1] || '').toLowerCase()
     if ('interface'.startsWith(s2) && a[2] && 'brief'.startsWith((a[2] || '').toLowerCase())) return renderIpIntBrief(cli.dev)
+    if (s2 === 'ssh') return renderIpSsh(cli.dev)
+    if (s2 === 'nat') {
+      const s3 = (a[2] || '').toLowerCase()
+      if ('translations'.startsWith(s3) && s3.length >= 1) return renderNatTranslations(cli.dev, cli.net)
+      if ('statistics'.startsWith(s3) && s3.length >= 1) return [`Total active translations: ${(cli.dev.nat?.statics.length) || 0}`]
+      return renderNatTranslations(cli.dev, cli.net)
+    }
     if ('route'.startsWith(s2) && s2.length >= 1) return renderIpRoute(cli.dev, cli.net)
     if ('ospf'.startsWith(s2) && s2.length >= 1) {
       const s3 = (a[2] || '').toLowerCase()
       if ('neighbor'.startsWith(s3) && s3.length >= 1) return renderOspfNeighbors(cli.dev, cli.net)
       return [`Routing Process "ospf ${cli.dev.ospf?.pid ?? ''}" with ID ${cli.dev.ospf?.routerId ?? '(unset)'}`]
     }
+  }
+  if (sub === 'ntp') {
+    const s2 = (a[1] || '').toLowerCase()
+    if ('associations'.startsWith(s2) && s2.length >= 1) return renderNtpAssociations(cli.dev, cli.net)
+    if ('status'.startsWith(s2) && s2.length >= 1) return renderNtpStatus(cli.dev, cli.net)
+    return renderNtpStatus(cli.dev, cli.net)
   }
   if (sub === 'vlan') return renderVlanBrief(cli.dev)
   if (sub === 'cdp') {

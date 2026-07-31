@@ -59,6 +59,18 @@ export function createDevice(opts = {}) {
     enableSecret: null,
     lines: { console: {}, vty: {} },
     banner: null,
+    // Remote access / SSH (4.8)
+    domainName: null,
+    rsaKey: null, // { modulus }
+    users: [], // [{ name, secret }]
+    // NTP (4.2)
+    ntp: { master: false, stratum: 8, servers: [] },
+    // DHCP (4.6): server pools + globally excluded addresses
+    dhcpPools: {}, // name -> { network, mask, defaultRouter, dnsServer }
+    dhcpExcluded: [], // [ip]
+    // NAT (4.1)
+    nat: { statics: [], pools: {}, insideSourceLists: [] },
+    acls: {}, // id -> [{ action, src, wildcard }]  (minimal, for NAT source lists)
     // Runtime. savedConfig is a snapshot of running-config taken at the last
     // write/copy; null means "never saved". The grader compares it to the
     // current running-config to know whether unsaved changes exist.
@@ -92,6 +104,10 @@ export function getInterface(dev, name) {
       lldpRx: true,
       // etherchannel membership: null | { id, mode: 'active'|'passive'|'on' }
       channelGroup: null,
+      // IP services
+      natRole: null, // null | 'inside' | 'outside'
+      helperAddress: null, // DHCP relay target
+      addressMode: 'static', // 'static' | 'dhcp' (ip address dhcp)
       // link
       connected: false, // set true when a link is attached
       lineProtocol: false,

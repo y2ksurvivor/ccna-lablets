@@ -5,13 +5,27 @@
 import { discoveryNeighbors, etherchannelUp } from './network.js'
 import { getInterface } from './device.js'
 import { routingTable, ospfNeighbors, maskToLen } from './l3.js'
+import { ntpSynced, natTranslations } from './ipservices.js'
 
 export function renderRunningConfig(dev) {
   const out = ['Building configuration...', '', 'Current configuration:', '!']
   out.push(`hostname ${dev.hostname}`, '!')
   if (dev.enableSecret) out.push(`enable secret ${dev.enableSecret}`, '!')
+  for (const u of (dev.users || [])) out.push(`username ${u.name} secret ${u.secret}`)
+  if ((dev.users || []).length) out.push('!')
+  if (dev.domainName) out.push(`ip domain-name ${dev.domainName}`, '!')
+  if (dev.rsaKey) out.push(`! crypto key rsa ${dev.rsaKey.modulus} bits generated`, '!')
   if (dev.lldpEnabled) out.push('lldp run', '!')
   if (dev.cdpEnabled === false) out.push('no cdp run', '!')
+  // DHCP pools
+  for (const p of Object.values(dev.dhcpPools || {})) {
+    out.push(`ip dhcp pool ${p.name}`)
+    if (p.network) out.push(` network ${p.network} ${p.mask || ''}`.trimEnd())
+    if (p.defaultRouter) out.push(` default-router ${p.defaultRouter}`)
+    if (p.dnsServer) out.push(` dns-server ${p.dnsServer}`)
+    out.push('!')
+  }
+  for (const e of (dev.dhcpExcluded || [])) out.push(`ip dhcp excluded-address ${e}`)
 
   if (dev.kind === 'switch') {
     const vlans = Object.values(dev.vlans).filter(v => v.id !== 1)
@@ -33,7 +47,10 @@ export function renderRunningConfig(dev) {
         out.push(' switchport mode access')
       }
     }
-    if (ifc.ip) out.push(` ip address ${ifc.ip} ${ifc.mask}`)
+    if (ifc.addressMode === 'dhcp') out.push(' ip address dhcp')
+    else if (ifc.ip) out.push(` ip address ${ifc.ip} ${ifc.mask}`)
+    if (ifc.natRole) out.push(` ip nat ${ifc.natRole}`)
+    if (ifc.helperAddress) out.push(` ip helper-address ${ifc.helperAddress}`)
     if (ifc.channelGroup) out.push(` channel-group ${ifc.channelGroup.id} mode ${ifc.channelGroup.mode}`)
     if (ifc.cdpEnabled === false) out.push(' no cdp enable')
     if (ifc.shutdown) out.push(' shutdown')
@@ -48,10 +65,36 @@ export function renderRunningConfig(dev) {
     out.push('!')
   }
 
+  // NAT
+  if (dev.nat) {
+    for (const p of Object.values(dev.nat.pools)) {
+      out.push(`ip nat pool ${p.name} ${p.start} ${p.end}${p.mask ? ' netmask ' + p.mask : ''}`)
+    }
+    for (const s of dev.nat.statics) out.push(`ip nat inside source static ${s.insideLocal} ${s.insideGlobal}`)
+    for (const l of dev.nat.insideSourceLists) out.push(`ip nat inside source list ${l.acl} pool ${l.pool}${l.overload ? ' overload' : ''}`)
+    if (dev.nat.pools && (Object.keys(dev.nat.pools).length || dev.nat.statics.length || dev.nat.insideSourceLists.length)) out.push('!')
+  }
+  // ACLs
+  for (const [id, entries] of Object.entries(dev.acls || {})) {
+    for (const e of entries) out.push(`access-list ${id} ${e.action} ${e.src || ''}${e.wildcard ? ' ' + e.wildcard : ''}`.trimEnd())
+  }
+  // Static routes
   for (const r of dev.routes) {
     out.push(`ip route ${r.prefix} ${r.mask} ${r.nextHop}${r.ad && r.ad !== 1 ? ' ' + r.ad : ''}`)
   }
   if (dev.routes.length) out.push('!')
+  // NTP
+  if (dev.ntp?.master) out.push(`ntp master ${dev.ntp.stratum}`)
+  for (const s of (dev.ntp?.servers || [])) out.push(`ntp server ${s}`)
+  // Lines
+  const vty = dev.lines?.vty
+  if (vty && (vty.transportInput || vty.login || vty.password)) {
+    out.push('line vty 0 4')
+    if (vty.password) out.push(` password ${vty.password}`)
+    if (vty.login) out.push(vty.login === 'local' ? ' login local' : ' login')
+    if (vty.transportInput) out.push(` transport input ${vty.transportInput.join(' ')}`)
+    out.push('!')
+  }
 
   out.push('end')
   return out
@@ -193,6 +236,47 @@ export function renderOspfNeighbors(dev, net) {
     out.push(`${n.id.padEnd(15)} 1     FULL/BDR        00:00:35    ${n.ip.padEnd(15)} `)
   }
   if (!nbrs.length) out.push('(no OSPF neighbors — check network statements, areas, and interface state)')
+  return out
+}
+
+export function renderIpSsh(dev) {
+  if (!dev.rsaKey) {
+    return ['SSH Disabled - version 2.0', '%Please create RSA keys (of at least 768 bits) to enable SSH.']
+  }
+  return [
+    'SSH Enabled - version 2.0',
+    'Authentication methods:publickey,keyboard-interactive,password',
+    'Authentication timeout: 120 secs; Authentication retries: 3',
+  ]
+}
+
+export function renderNtpStatus(dev, net) {
+  const synced = ntpSynced(net, dev.id)
+  if (!synced) return ['Clock is unsynchronized, stratum 16, no reference clock']
+  const st = dev.ntp.master ? dev.ntp.stratum : dev.ntp.stratum + 1
+  const ref = dev.ntp.master ? '127.127.1.1' : (dev.ntp.servers[0] || '0.0.0.0')
+  return [`Clock is synchronized, stratum ${st}, reference is ${ref}`]
+}
+
+export function renderNtpAssociations(dev, net) {
+  const out = ['  address         ref clock       st   when   poll reach  delay  offset   disp',
+    '=================================================================================']
+  for (const s of dev.ntp.servers) {
+    const good = ntpSynced(net, dev.id)
+    out.push(`${good ? '*~' : ' ~'}${s.padEnd(15)} .LOCL.           8     16     64  ${good ? '377' : '  0'}   1.00    0.50   1.5`)
+  }
+  if (!dev.ntp.servers.length) out.push('(no NTP associations)')
+  out.push(' * sys.peer, # selected, + candidate, ~ configured')
+  return out
+}
+
+export function renderNatTranslations(dev, net) {
+  const t = natTranslations(dev)
+  const out = ['Pro  Inside global      Inside local       Outside local      Outside global']
+  for (const x of t) {
+    out.push(`${x.proto}  ${x.insideGlobal.padEnd(18)} ${x.insideLocal.padEnd(18)} ${x.outsideLocal.padEnd(18)} ${x.outsideGlobal}`)
+  }
+  if (!t.length) out.push('(no active translations)')
   return out
 }
 

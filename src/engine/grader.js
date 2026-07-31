@@ -49,6 +49,42 @@ export function ospfAdjacent(net, devId, neighborId) {
   return ospfNeighbors(net, devId).some(n => n.id === neighborId)
 }
 
+// --- IP services checks ------------------------------------------------------
+
+import { dhcpResolve, ntpSynced, natStaticReachable } from './ipservices.js'
+import { ipToInt } from './l3.js'
+
+export function sshReady(net, devId) {
+  const d = net.devices[devId]
+  if (!d) return false
+  const vty = d.lines?.vty || {}
+  const transport = vty.transportInput || []
+  const sshAllowed = transport.includes('ssh') || transport.includes('all')
+  return !!(d.domainName && d.rsaKey && d.users.length > 0 && sshAllowed && vty.login === 'local')
+}
+
+export function ntpIsSynced(net, devId) {
+  return ntpSynced(net, devId)
+}
+
+// Host receives a DHCP lease in the expected subnet.
+export function dhcpLeaseInSubnet(net, hostId, network, mask) {
+  const lease = dhcpResolve(net, hostId)
+  if (!lease) return false
+  const m = ipToInt(mask)
+  return (ipToInt(lease.ip) & m) >>> 0 === (ipToInt(network) & m) >>> 0
+}
+
+export function natReachable(net, natRouterId, outsideHostId, insideHostIp) {
+  return natStaticReachable(net, natRouterId, outsideHostId, insideHostIp)
+}
+
+export function ifaceNatRole(net, devId, ifaceName, role) {
+  const d = net.devices[devId]
+  const ifc = d && d.interfaces[canonicalIface(ifaceName)]
+  return !!(ifc && ifc.natRole === role)
+}
+
 // --- discovery protocol checks ----------------------------------------------
 
 export function discoverySeesNeighbor(net, devId, proto, neighborId) {

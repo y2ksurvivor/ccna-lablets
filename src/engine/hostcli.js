@@ -4,6 +4,7 @@
 // same component drives it.
 
 import { ping } from './l3.js'
+import { dhcpResolve } from './ipservices.js'
 
 export class HostCLI {
   constructor(host, net) {
@@ -45,13 +46,19 @@ export class HostCLI {
   }
 
   ipconfig() {
+    // Static IP if set; otherwise show a DHCP-resolved lease (DHCP lablet).
+    let ip = this.dev.ip, mask = this.dev.mask, gw = this.dev.gateway, via = ''
+    if (!ip) {
+      const lease = dhcpResolve(this.net, this.dev.id)
+      if (lease) { ip = lease.ip; mask = lease.mask; gw = lease.gateway; via = '   (assigned via DHCP)' }
+    }
     return [
       '',
       'Ethernet adapter Local Area Connection:',
       '',
-      `   IPv4 Address. . . . . . . . . . . : ${this.dev.ip || '(none)'}`,
-      `   Subnet Mask . . . . . . . . . . . : ${this.dev.mask || '(none)'}`,
-      `   Default Gateway . . . . . . . . . : ${this.dev.gateway || '(none)'}`,
+      `   IPv4 Address. . . . . . . . . . . : ${ip || '(none — DHCP failed)'}`,
+      `   Subnet Mask . . . . . . . . . . . : ${mask || '(none)'}`,
+      `   Default Gateway . . . . . . . . . : ${gw || '(none)'}${via}`,
       '',
     ]
   }
