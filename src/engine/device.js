@@ -43,6 +43,11 @@ export function createDevice(opts = {}) {
     hostname: opts.hostname || (kind === 'switch' ? 'Switch' : 'Router'),
     // Interfaces keyed by canonical name, e.g. "GigabitEthernet0/0".
     interfaces: {},
+    // Discovery protocols. CDP runs by default; LLDP is off until `lldp run`.
+    cdpEnabled: true,
+    lldpEnabled: false,
+    // EtherChannel: id -> { id, members: [ifaceName] }
+    portChannels: {},
     // L2 (switch) state
     vlans: kind === 'switch' ? { 1: { id: 1, name: 'default' } } : {},
     macTable: {}, // mac -> { iface, vlan }
@@ -80,6 +85,12 @@ export function getInterface(dev, name) {
       accessVlan: dev.kind === 'switch' ? 1 : null,
       trunkNativeVlan: dev.kind === 'switch' ? 1 : null,
       trunkAllowed: 'all', // 'all' | array of vlan ids
+      // discovery protocols (per-interface)
+      cdpEnabled: true,
+      lldpTx: true,
+      lldpRx: true,
+      // etherchannel membership: null | { id, mode: 'active'|'passive'|'on' }
+      channelGroup: null,
       // link
       connected: false, // set true when a link is attached
       lineProtocol: false,

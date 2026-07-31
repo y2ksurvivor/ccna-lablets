@@ -14,7 +14,10 @@
 //   router    (config-router)#     routing protocol sub-config
 
 import { getInterface, canonicalIface, shortIface } from './device.js'
-import { renderRunningConfig, renderIpIntBrief, renderVlanBrief } from './show.js'
+import {
+  renderRunningConfig, renderIpIntBrief, renderVlanBrief,
+  renderCdpNeighbors, renderLldpNeighbors, renderEtherchannelSummary,
+} from './show.js'
 
 export class CLI {
   constructor(device, net = null) {
@@ -256,6 +259,22 @@ const COMMANDS = {
         return ['% Incomplete command.']
       },
     },
+    'cdp': {
+      help: 'Global CDP configuration',
+      argHelp: () => [{ name: 'run', help: 'Enable CDP' }],
+      run: (cli, a) => {
+        if ((a[0] || '').length && 'run'.startsWith(a[0])) { cli.dev.cdpEnabled = true; return [] }
+        return ['% Incomplete command.']
+      },
+    },
+    'lldp': {
+      help: 'Global LLDP configuration',
+      argHelp: () => [{ name: 'run', help: 'Enable LLDP' }],
+      run: (cli, a) => {
+        if ((a[0] || '').length && 'run'.startsWith(a[0])) { cli.dev.lldpEnabled = true; return [] }
+        return ['% Incomplete command.']
+      },
+    },
     'ip': {
       help: 'Global IP configuration',
       argHelp: (cli, a) => {
@@ -299,6 +318,33 @@ const COMMANDS = {
     'description': { help: 'Interface description', argHelp: () => [{ name: 'LINE', help: 'Up to 240 characters describing this interface' }], run: (cli, a) => { cli.ctx.iface.description = a.join(' '); return [] } },
     'shutdown': { help: 'Shut down interface', run: (cli) => { cli.ctx.iface.shutdown = true; cli.ctx.iface.lineProtocol = false; return [] } },
     'switchport': { help: 'Set switching mode', argHelp: switchportArgHelp, run: (cli, a) => switchportCmd(cli, a) },
+    'cdp': {
+      help: 'CDP interface subcommands',
+      argHelp: () => [{ name: 'enable', help: 'Enable CDP on interface' }],
+      run: (cli, a) => { if ('enable'.startsWith(a[0] || 'x')) { cli.ctx.iface.cdpEnabled = true; return [] } return ['% Incomplete command.'] },
+    },
+    'lldp': {
+      help: 'LLDP interface subcommands',
+      argHelp: () => [{ name: 'transmit', help: 'Enable LLDP transmit' }, { name: 'receive', help: 'Enable LLDP receive' }],
+      run: (cli, a) => {
+        if ('transmit'.startsWith(a[0] || 'x')) { cli.ctx.iface.lldpTx = true; return [] }
+        if ('receive'.startsWith(a[0] || 'x')) { cli.ctx.iface.lldpRx = true; return [] }
+        return ['% Incomplete command.']
+      },
+    },
+    'channel-group': {
+      help: 'Add interface to an EtherChannel',
+      argHelp: (cli, a) => {
+        if (a.length === 0) return [{ name: '<1-48>', help: 'Channel group number' }]
+        if (a.length === 1) return [{ name: 'mode', help: 'Set EtherChannel mode' }]
+        return [
+          { name: 'active', help: 'Enable LACP unconditionally' },
+          { name: 'passive', help: 'Enable LACP only if a partner is detected' },
+          { name: 'on', help: 'Enable EtherChannel only (no negotiation)' },
+        ]
+      },
+      run: (cli, a) => channelGroupCmd(cli, a),
+    },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
     exit: { help: 'Exit interface config', run: (cli) => { cli.mode = 'config'; return [] } },
     end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
@@ -329,9 +375,14 @@ function showArgHelp(cli, a) {
     const opts = [
       { name: 'running-config', help: 'Current operating configuration' },
       { name: 'ip', help: 'IP information' },
+      { name: 'cdp', help: 'CDP information' },
+      { name: 'lldp', help: 'LLDP information' },
       { name: 'version', help: 'System hardware and software status' },
     ]
-    if (cli.dev.kind === 'switch') opts.push({ name: 'vlan', help: 'VTP VLAN status' })
+    if (cli.dev.kind === 'switch') {
+      opts.push({ name: 'vlan', help: 'VTP VLAN status' })
+      opts.push({ name: 'etherchannel', help: 'EtherChannel information' })
+    }
     return opts
   }
   if (a[0] === 'ip') {
@@ -341,6 +392,10 @@ function showArgHelp(cli, a) {
     ]
     if (a[1] === 'interface') return [{ name: 'brief', help: 'Brief summary of IP status' }]
   }
+  if (a[0] === 'cdp') return [{ name: 'neighbors', help: 'CDP neighbor entries' }]
+  if (a[0] === 'cdp' && a[1] === 'neighbors') return [{ name: 'detail', help: 'Detailed neighbor information' }]
+  if (a[0] === 'lldp') return [{ name: 'neighbors', help: 'LLDP neighbor entries' }]
+  if (a[0] === 'etherchannel') return [{ name: 'summary', help: 'One-line summary per channel-group' }]
   return [{ name: '<cr>', help: '' }]
 }
 
@@ -395,12 +450,40 @@ function saveConfig(cli) {
 }
 
 function negate(cli, a) {
+  if (cli.mode === 'config') {
+    if (a[0] === 'cdp' && 'run'.startsWith(a[1] || 'x')) { cli.dev.cdpEnabled = false; return [] }
+    if (a[0] === 'lldp' && 'run'.startsWith(a[1] || 'x')) { cli.dev.lldpEnabled = false; return [] }
+  }
   if (cli.mode === 'iface') {
     if (a[0] === 'shutdown') { cli.ctx.iface.shutdown = false; cli.ctx.iface.lineProtocol = !!cli.ctx.iface.ip || cli.dev.kind === 'switch'; return [] }
     if (a[0] === 'ip' && a[1] === 'address') { cli.ctx.iface.ip = null; cli.ctx.iface.mask = null; return [] }
     if (a[0] === 'description') { cli.ctx.iface.description = null; return [] }
+    if (a[0] === 'cdp' && 'enable'.startsWith(a[1] || 'x')) { cli.ctx.iface.cdpEnabled = false; return [] }
+    if (a[0] === 'channel-group') {
+      const cg = cli.ctx.iface.channelGroup
+      if (cg) {
+        const po = cli.dev.portChannels[cg.id]
+        if (po) po.members = po.members.filter(m => m !== cli.ctx.iface.name)
+        cli.ctx.iface.channelGroup = null
+      }
+      return []
+    }
   }
   return []
+}
+
+function channelGroupCmd(cli, a) {
+  const id = parseInt(a[0], 10)
+  if (!id || id < 1 || id > 48) return ['% Incomplete command.']
+  if ((a[1] || '') !== 'mode' && !'mode'.startsWith(a[1] || 'x')) return ['% Incomplete command.']
+  const mode = a[2]
+  if (!['active', 'passive', 'on'].includes(mode)) return ['% Invalid input detected']
+  const ifc = cli.ctx.iface
+  ifc.channelGroup = { id, mode }
+  if (!cli.dev.portChannels[id]) cli.dev.portChannels[id] = { id, members: [] }
+  const po = cli.dev.portChannels[id]
+  if (!po.members.includes(ifc.name)) po.members.push(ifc.name)
+  return [`Creating a port-channel interface Port-channel ${id}`]
 }
 
 function switchportCmd(cli, a) {
@@ -452,9 +535,27 @@ function showCmd(cli, a) {
   if (sub === 'ip') {
     const s2 = (a[1] || '').toLowerCase()
     if ('interface'.startsWith(s2) && a[2] && 'brief'.startsWith((a[2] || '').toLowerCase())) return renderIpIntBrief(cli.dev)
-    if ('route'.startsWith(s2)) return ['(ip routing table — coming in Phase 2)']
+    if ('route'.startsWith(s2)) return ['(ip routing table — arrives with the routing phase)']
   }
   if (sub === 'vlan') return renderVlanBrief(cli.dev)
+  if (sub === 'cdp') {
+    const s2 = (a[1] || '').toLowerCase()
+    if ('neighbors'.startsWith(s2) && s2.length >= 1) {
+      const detail = 'detail'.startsWith((a[2] || 'x').toLowerCase()) && a[2]
+      return renderCdpNeighbors(cli.dev, cli.net, !!detail)
+    }
+    return ['Global CDP information:', `        CDP is ${cli.dev.cdpEnabled ? 'enabled' : 'not enabled'} globally`]
+  }
+  if (sub === 'lldp') {
+    const s2 = (a[1] || '').toLowerCase()
+    if ('neighbors'.startsWith(s2) && s2.length >= 1) return renderLldpNeighbors(cli.dev, cli.net)
+    return ['Global LLDP Information:', `    Status: ${cli.dev.lldpEnabled ? 'ACTIVE' : 'INACTIVE'}`]
+  }
+  if ('etherchannel'.startsWith(sub) && sub.length >= 4) {
+    const s2 = (a[1] || '').toLowerCase()
+    if ('summary'.startsWith(s2)) return renderEtherchannelSummary(cli.dev, cli.net)
+    return renderEtherchannelSummary(cli.dev, cli.net)
+  }
   if ('version'.startsWith(sub)) return ['Cisco IOS Software (CCNA Lablets simulated), Version 15.x', `${cli.dev.hostname} uptime is 0 minutes`]
   return ['% Invalid input detected']
 }

@@ -103,6 +103,82 @@ export function hostVlan(net, hostId) {
   return { vlan: ifc.accessVlan || 1, switchId: sw.id }
 }
 
+// --- discovery protocols (CDP / LLDP) ----------------------------------------
+
+function capabilityCode(dev) {
+  return dev.kind === 'router' ? 'R' : dev.kind === 'switch' ? 'S' : 'H'
+}
+
+// Neighbors visible via a discovery protocol. `proto` is 'cdp' or 'lldp'.
+// A neighbor appears only if the protocol is enabled on both ends (globally,
+// and per-interface for CDP) and the local port is up and connected.
+export function discoveryNeighbors(net, devId, proto) {
+  const dev = net.devices[devId]
+  if (!dev || dev.kind === 'host') return []
+  const globalOn = proto === 'cdp' ? dev.cdpEnabled : dev.lldpEnabled
+  if (!globalOn) return []
+
+  const out = []
+  for (const ifc of Object.values(dev.interfaces)) {
+    if (ifc.shutdown || !ifc.connected) continue
+    if (proto === 'cdp' && !ifc.cdpEnabled) continue
+    if (proto === 'lldp' && !ifc.lldpTx) continue
+
+    const nb = neighbor(net, devId, ifc.name)
+    if (!nb) continue
+    const nbDev = net.devices[nb.devId]
+    if (!nbDev || nbDev.kind === 'host') continue
+
+    const nbGlobal = proto === 'cdp' ? nbDev.cdpEnabled : nbDev.lldpEnabled
+    if (!nbGlobal) continue
+    const nbIfc = getInterface(nbDev, nb.port)
+    if (!nbIfc || nbIfc.shutdown) continue
+    if (proto === 'cdp' && !nbIfc.cdpEnabled) continue
+    if (proto === 'lldp' && !nbIfc.lldpRx) continue
+
+    out.push({
+      neighborId: nbDev.id,
+      neighborName: nbDev.hostname,
+      localPort: ifc.shortName,
+      remotePort: nbIfc.shortName,
+      capability: capabilityCode(nbDev),
+      platform: nbDev.kind === 'router' ? 'CCNA-Router' : 'CCNA-Switch',
+    })
+  }
+  return out
+}
+
+// --- EtherChannel ------------------------------------------------------------
+
+// LACP/PAgP-style compatibility: on+on, or active/passive combos (but not
+// passive+passive). `on` never bundles with active/passive.
+export function modesCompatible(a, b) {
+  if (!a || !b) return false
+  if (a === 'on' || b === 'on') return a === 'on' && b === 'on'
+  if (a === 'passive' && b === 'passive') return false
+  return true // active/active, active/passive, passive/active
+}
+
+// Is Port-channel `poId` on `devId` actually bundled (member ports linked to a
+// neighbor whose corresponding ports share the channel with compatible modes)?
+export function etherchannelUp(net, devId, poId) {
+  const dev = net.devices[devId]
+  const po = dev?.portChannels?.[poId]
+  if (!po || po.members.length === 0) return false
+
+  for (const memberName of po.members) {
+    const ifc = getInterface(dev, memberName)
+    if (!ifc || ifc.shutdown || !ifc.channelGroup) continue
+    const nb = neighbor(net, devId, memberName)
+    if (!nb) continue
+    const nbDev = net.devices[nb.devId]
+    const nbIfc = nbDev && getInterface(nbDev, nb.port)
+    if (!nbIfc || !nbIfc.channelGroup) continue
+    if (modesCompatible(ifc.channelGroup.mode, nbIfc.channelGroup.mode)) return true
+  }
+  return false
+}
+
 // --- reachability / ping -----------------------------------------------------
 
 function sameSubnet(ipA, ipB, mask) {

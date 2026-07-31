@@ -24,6 +24,31 @@ export function scorePct(results) {
 
 import { getInterface, canonicalIface } from './device.js'
 import { renderRunningConfig } from './show.js'
+import { discoveryNeighbors, etherchannelUp } from './network.js'
+
+// --- discovery protocol checks ----------------------------------------------
+
+export function discoverySeesNeighbor(net, devId, proto, neighborId) {
+  return discoveryNeighbors(net, devId, proto).some(n => n.neighborId === neighborId)
+}
+
+export function globalDiscoveryOn(net, devId, proto) {
+  const d = net.devices[devId]
+  if (!d) return false
+  return proto === 'cdp' ? d.cdpEnabled === true : d.lldpEnabled === true
+}
+
+// --- EtherChannel checks -----------------------------------------------------
+
+export function portInChannel(net, devId, ifaceName, id) {
+  const d = net.devices[devId]
+  const ifc = d && d.interfaces[canonicalIface(ifaceName)]
+  return !!(ifc && ifc.channelGroup && ifc.channelGroup.id === id)
+}
+
+export function channelUp(net, devId, id) {
+  return etherchannelUp(net, devId, id)
+}
 
 // True when the device has been saved AND nothing changed since (running config
 // matches the saved snapshot). Never-saved devices return false.

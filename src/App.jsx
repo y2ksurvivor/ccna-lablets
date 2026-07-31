@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import Terminal from './components/Terminal.jsx'
 import TopologyView from './components/TopologyView.jsx'
 import TaskPanel from './components/TaskPanel.jsx'
@@ -68,6 +68,20 @@ export default function App() {
   function resetCount() {
     setCompletions(resetCompletions(scenario.id))
   }
+
+  // Rebuild the whole session when the selected scenario changes (skip mount).
+  const didMount = useRef(false)
+  useEffect(() => {
+    if (!didMount.current) { didMount.current = true; return }
+    const s = scenario.build()
+    setSim(s)
+    setActive(Object.keys(s.consoles)[0])
+    setBuffers(initBuffers(s))
+    setHistories(initHistories(s))
+    setResults(grade(scenario, s.net))
+    countedRef.current = false
+    setCompletions(getCompletions(scenario.id))
+  }, [scenarioId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const cli = sim.consoles[active]
 
