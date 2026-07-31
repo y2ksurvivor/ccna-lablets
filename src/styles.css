@@ -179,6 +179,25 @@ body {
   border-radius: 20px;
 }
 .score.done { color: #fff; background: var(--pass); }
+.completions-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.completions { font-size: 12px; color: var(--muted); }
+.completions strong { color: var(--text); font-family: monospace; }
+.reset-count-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.reset-count-btn:hover { color: #f85149; border-color: #f85149; }
+
 .tasks-blueprint { margin: 10px 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .bp-chip {
   font-size: 11px;

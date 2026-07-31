@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import Terminal from './components/Terminal.jsx'
 import TopologyView from './components/TopologyView.jsx'
 import TaskPanel from './components/TaskPanel.jsx'
 import { getScenario, scenarios } from './scenarios/index.js'
 import { grade, scorePct } from './engine/grader.js'
+import { getCompletions, bumpCompletions, resetCompletions } from './storage.js'
 
 function initBuffers(sim) {
   const b = {}
@@ -28,6 +29,10 @@ export default function App() {
   const [buffers, setBuffers] = useState(() => initBuffers(sim))
   const [histories, setHistories] = useState(() => initHistories(sim))
   const [results, setResults] = useState(() => grade(scenario, sim.net))
+  const [completions, setCompletions] = useState(() => getCompletions(scenarioId))
+  // Whether the current attempt already counted, so re-hitting 100% (e.g. after
+  // editing then re-saving) doesn't inflate the count. Reset by "Reset lab".
+  const countedRef = useRef(false)
 
   const runCommand = useCallback((devId, cmd) => {
     const cli = sim.consoles[devId]
@@ -42,8 +47,13 @@ export default function App() {
     if (cmd.trim() && !cmd.trim().endsWith('?')) {
       setHistories(h => ({ ...h, [devId]: [...h[devId], cmd] }))
     }
-    setResults(grade(scenario, sim.net))
-  }, [sim, scenario])
+    const newResults = grade(scenario, sim.net)
+    setResults(newResults)
+    if (scorePct(newResults) === 100 && !countedRef.current) {
+      countedRef.current = true
+      setCompletions(bumpCompletions(scenario.id))
+    }
+  }, [sim, scenario, scenarioId])
 
   function reset() {
     const s = scenario.build()
@@ -52,6 +62,11 @@ export default function App() {
     setBuffers(initBuffers(s))
     setHistories(initHistories(s))
     setResults(grade(scenario, s.net))
+    countedRef.current = false // fresh attempt can count again
+  }
+
+  function resetCount() {
+    setCompletions(resetCompletions(scenario.id))
   }
 
   const cli = sim.consoles[active]
@@ -98,7 +113,8 @@ export default function App() {
             <h2>{scenario.title}</h2>
             <pre className="intro-text">{scenario.intro.join('\n')}</pre>
           </div>
-          <TaskPanel scenario={scenario} results={results} score={scorePct(results)} />
+          <TaskPanel scenario={scenario} results={results} score={scorePct(results)}
+            completions={completions} onResetCount={resetCount} />
         </aside>
       </main>
     </div>

@@ -2,12 +2,22 @@
 // score and a per-task hint you can reveal when stuck.
 import { useState } from 'react'
 
-export default function TaskPanel({ scenario, results, score }) {
+export default function TaskPanel({ scenario, results, score, completions, onResetCount }) {
   return (
     <div className="tasks">
       <div className="tasks-header">
         <h2>Tasks</h2>
         <span className={`score ${score === 100 ? 'done' : ''}`}>{score}%</span>
+      </div>
+      <div className="completions-row">
+        <span className="completions">
+          Completed <strong>{completions}</strong> {completions === 1 ? 'time' : 'times'}
+        </span>
+        {completions > 0 && (
+          <button className="reset-count-btn" onClick={onResetCount} title="Reset completion count to zero">
+            reset count
+          </button>
+        )}
       </div>
       <div className="tasks-blueprint">
         {scenario.blueprint.map((b, i) => <span key={i} className="bp-chip">{b}</span>)}
