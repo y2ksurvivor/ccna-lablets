@@ -9,8 +9,13 @@ import { ntpSynced, natTranslations } from './ipservices.js'
 
 export function renderRunningConfig(dev) {
   const out = ['Building configuration...', '', 'Current configuration:', '!']
+  if (dev.servicePasswordEncryption) out.push('service password-encryption', '!')
   out.push(`hostname ${dev.hostname}`, '!')
-  if (dev.enableSecret) out.push(`enable secret ${dev.enableSecret}`, '!')
+  if (dev.enableSecret) out.push(`enable secret ${dev.enableSecret}`)
+  if (dev.enablePassword) out.push(`enable password ${dev.enablePassword}`)
+  if (dev.enableSecret || dev.enablePassword) out.push('!')
+  if (dev.dhcpSnooping?.enabled) { out.push('ip dhcp snooping'); if (dev.dhcpSnooping.vlans.length) out.push(`ip dhcp snooping vlan ${dev.dhcpSnooping.vlans.join(',')}`); out.push('!') }
+  if (dev.arpInspection?.vlans.length) out.push(`ip arp inspection vlan ${dev.arpInspection.vlans.join(',')}`, '!')
   for (const u of (dev.users || [])) out.push(`username ${u.name} secret ${u.secret}`)
   if ((dev.users || []).length) out.push('!')
   if (dev.domainName) out.push(`ip domain-name ${dev.domainName}`, '!')
@@ -46,11 +51,21 @@ export function renderRunningConfig(dev) {
         if (ifc.accessVlan && ifc.accessVlan !== 1) out.push(` switchport access vlan ${ifc.accessVlan}`)
         out.push(' switchport mode access')
       }
+      if (ifc.portSecurity?.enabled) {
+        out.push(' switchport port-security')
+        if (ifc.portSecurity.maximum && ifc.portSecurity.maximum !== 1) out.push(` switchport port-security maximum ${ifc.portSecurity.maximum}`)
+        if (ifc.portSecurity.sticky) out.push(' switchport port-security mac-address sticky')
+        if (ifc.portSecurity.violation && ifc.portSecurity.violation !== 'shutdown') out.push(` switchport port-security violation ${ifc.portSecurity.violation}`)
+      }
+      if (ifc.dhcpSnoopTrust) out.push(' ip dhcp snooping trust')
+      if (ifc.arpInspectTrust) out.push(' ip arp inspection trust')
     }
     if (ifc.addressMode === 'dhcp') out.push(' ip address dhcp')
     else if (ifc.ip) out.push(` ip address ${ifc.ip} ${ifc.mask}`)
     if (ifc.natRole) out.push(` ip nat ${ifc.natRole}`)
     if (ifc.helperAddress) out.push(` ip helper-address ${ifc.helperAddress}`)
+    if (ifc.accessGroupIn) out.push(` ip access-group ${ifc.accessGroupIn} in`)
+    if (ifc.accessGroupOut) out.push(` ip access-group ${ifc.accessGroupOut} out`)
     if (ifc.channelGroup) out.push(` channel-group ${ifc.channelGroup.id} mode ${ifc.channelGroup.mode}`)
     if (ifc.cdpEnabled === false) out.push(' no cdp enable')
     if (ifc.shutdown) out.push(' shutdown')
@@ -76,7 +91,7 @@ export function renderRunningConfig(dev) {
   }
   // ACLs
   for (const [id, entries] of Object.entries(dev.acls || {})) {
-    for (const e of entries) out.push(`access-list ${id} ${e.action} ${e.src || ''}${e.wildcard ? ' ' + e.wildcard : ''}`.trimEnd())
+    for (const e of entries) out.push(`access-list ${id} ${renderAclEntry(e)}`)
   }
   // Static routes
   for (const r of dev.routes) {
@@ -87,6 +102,13 @@ export function renderRunningConfig(dev) {
   if (dev.ntp?.master) out.push(`ntp master ${dev.ntp.stratum}`)
   for (const s of (dev.ntp?.servers || [])) out.push(`ntp server ${s}`)
   // Lines
+  const con = dev.lines?.console
+  if (con && (con.login || con.password)) {
+    out.push('line con 0')
+    if (con.password) out.push(` password ${con.password}`)
+    if (con.login) out.push(con.login === 'local' ? ' login local' : ' login')
+    out.push('!')
+  }
   const vty = dev.lines?.vty
   if (vty && (vty.transportInput || vty.login || vty.password)) {
     out.push('line vty 0 4')
@@ -98,6 +120,17 @@ export function renderRunningConfig(dev) {
 
   out.push('end')
   return out
+}
+
+function aclAddr(a) {
+  if (!a || a.any) return 'any'
+  if (!a.wildcard || a.wildcard === '0.0.0.0') return `host ${a.ip}`
+  return `${a.ip} ${a.wildcard}`
+}
+
+function renderAclEntry(e) {
+  if (e.kind === 'extended') return `${e.action} ${e.proto} ${aclAddr(e.src)} ${aclAddr(e.dst)}`
+  return `${e.action} ${aclAddr(e.src)}`
 }
 
 export function renderIpIntBrief(dev) {
@@ -236,6 +269,33 @@ export function renderOspfNeighbors(dev, net) {
     out.push(`${n.id.padEnd(15)} 1     FULL/BDR        00:00:35    ${n.ip.padEnd(15)} `)
   }
   if (!nbrs.length) out.push('(no OSPF neighbors — check network statements, areas, and interface state)')
+  return out
+}
+
+export function renderAccessLists(dev) {
+  const out = []
+  for (const [id, entries] of Object.entries(dev.acls || {})) {
+    const type = parseInt(id, 10) <= 99 ? 'Standard' : 'Extended'
+    out.push(`${type} IP access list ${id}`)
+    entries.forEach((e, i) => out.push(`    ${(i + 1) * 10} ${renderAclEntry(e)}`))
+  }
+  if (!out.length) out.push('(no access lists configured)')
+  return out
+}
+
+export function renderPortSecurity(dev) {
+  const out = [
+    'Secure Port  MaxSecureAddr  CurrentAddr  SecurityViolation  Security Action',
+    '                 (Count)       (Count)         (Count)',
+    '----------------------------------------------------------------------------',
+  ]
+  let any = false
+  for (const ifc of Object.values(dev.interfaces)) {
+    if (!ifc.portSecurity?.enabled) continue
+    any = true
+    out.push(`${ifc.shortName.padEnd(12)} ${String(ifc.portSecurity.maximum).padEnd(14)} 0            0                  ${ifc.portSecurity.violation}`)
+  }
+  if (!any) out.push('(no ports have port-security enabled)')
   return out
 }
 

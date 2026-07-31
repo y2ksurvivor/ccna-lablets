@@ -57,7 +57,7 @@ function portCarries(ifc, vlan) {
 // Flood a frame with `vlan` starting at (startDevId) switch fabric, collecting
 // the set of host endpoints it reaches. BFS over switches through trunk/access
 // links that carry the VLAN.
-function floodVlan(net, startDevId, vlan) {
+export function floodVlan(net, startDevId, vlan) {
   const reachedHosts = new Set()
   const visitedSwitches = new Set()
   const queue = [startDevId]

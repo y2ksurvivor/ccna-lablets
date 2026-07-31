@@ -57,8 +57,13 @@ export function createDevice(opts = {}) {
     arp: {}, // ip -> mac
     // Global config
     enableSecret: null,
+    enablePassword: null,
+    servicePasswordEncryption: false,
     lines: { console: {}, vty: {} },
     banner: null,
+    // Layer 2 security (5.7): DHCP snooping + dynamic ARP inspection
+    dhcpSnooping: { enabled: false, vlans: [] },
+    arpInspection: { vlans: [] },
     // Remote access / SSH (4.8)
     domainName: null,
     rsaKey: null, // { modulus }
@@ -108,6 +113,12 @@ export function getInterface(dev, name) {
       natRole: null, // null | 'inside' | 'outside'
       helperAddress: null, // DHCP relay target
       addressMode: 'static', // 'static' | 'dhcp' (ip address dhcp)
+      // Security
+      accessGroupIn: null, // ACL id applied inbound
+      accessGroupOut: null, // ACL id applied outbound
+      portSecurity: null, // { enabled, maximum, violation, sticky }
+      dhcpSnoopTrust: false,
+      arpInspectTrust: false,
       // link
       connected: false, // set true when a link is attached
       lineProtocol: false,

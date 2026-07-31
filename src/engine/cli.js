@@ -19,6 +19,7 @@ import {
   renderCdpNeighbors, renderLldpNeighbors, renderEtherchannelSummary,
   renderIpRoute, renderOspfNeighbors,
   renderIpSsh, renderNtpStatus, renderNtpAssociations, renderNatTranslations,
+  renderAccessLists, renderPortSecurity,
 } from './show.js'
 
 export class CLI {
@@ -255,10 +256,19 @@ const COMMANDS = {
     'enable': {
       help: 'Modify enable password parameters',
       argHelp: (cli, a) => a.length === 0
-        ? [{ name: 'secret', help: 'Assign the privileged level secret' }]
-        : [{ name: 'WORD', help: 'The enable secret' }],
+        ? [{ name: 'secret', help: 'Assign the privileged level secret' }, { name: 'password', help: 'Assign the privileged level password' }]
+        : [{ name: 'WORD', help: 'The enable secret/password' }],
       run: (cli, a) => {
         if (a[0] === 'secret') { cli.dev.enableSecret = a.slice(1).join(' '); return [] }
+        if (a[0] === 'password') { cli.dev.enablePassword = a.slice(1).join(' '); return [] }
+        return ['% Incomplete command.']
+      },
+    },
+    'service': {
+      help: 'Modify use of network based services',
+      argHelp: () => [{ name: 'password-encryption', help: 'Encrypt system passwords' }],
+      run: (cli, a) => {
+        if ('password-encryption'.startsWith(a[0] || 'x')) { cli.dev.servicePasswordEncryption = true; return [] }
         return ['% Incomplete command.']
       },
     },
@@ -370,15 +380,7 @@ const COMMANDS = {
     },
     'access-list': {
       help: 'Add an access list entry',
-      run: (cli, a) => {
-        // access-list <n> permit|deny <src> [wildcard]
-        const id = a[0]
-        const action = a[1]
-        if (!id || !action) return ['% Incomplete command.']
-        if (!cli.dev.acls[id]) cli.dev.acls[id] = []
-        cli.dev.acls[id].push({ action, src: a[2], wildcard: a[3] })
-        return []
-      },
+      run: (cli, a) => aclCmd(cli, a),
     },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
     exit: { help: 'Exit config mode', run: (cli) => { cli.mode = 'enable'; return [] } },
@@ -391,9 +393,14 @@ const COMMANDS = {
       argHelp: (cli, a) => {
         if (a.length === 0) return [
           { name: 'address', help: 'Set the IP address of an interface' },
+          { name: 'access-group', help: 'Specify access control for packets' },
           { name: 'nat', help: 'NAT interface commands' },
           { name: 'helper-address', help: 'Specify a destination address for UDP broadcasts (DHCP relay)' },
         ]
+        if (a[0] === 'access-group') {
+          if (a.length === 1) return [{ name: '<1-199>', help: 'Access list number' }]
+          return [{ name: 'in', help: 'Inbound packets' }, { name: 'out', help: 'Outbound packets' }]
+        }
         if (a[0] === 'address') {
           if (a.length === 1) return [{ name: 'A.B.C.D', help: 'IP address' }, { name: 'dhcp', help: 'IP Address negotiated via DHCP' }]
           if (a.length === 2) return [{ name: 'A.B.C.D', help: 'IP subnet mask' }]
@@ -422,6 +429,16 @@ const COMMANDS = {
           cli.ctx.iface.helperAddress = a[1]
           return []
         }
+        if (a[0] === 'access-group') {
+          const [aclId, dir] = [a[1], a[2]]
+          if (!aclId || !dir) return ['% Incomplete command.']
+          if (dir === 'in') cli.ctx.iface.accessGroupIn = aclId
+          else if (dir === 'out') cli.ctx.iface.accessGroupOut = aclId
+          else return ['% Invalid input detected']
+          return []
+        }
+        if (a[0] === 'dhcp' && a[1] === 'snooping' && 'trust'.startsWith(a[2] || 'x')) { cli.ctx.iface.dhcpSnoopTrust = true; return [] }
+        if (a[0] === 'arp' && a[1] === 'inspection' && 'trust'.startsWith(a[2] || 'x')) { cli.ctx.iface.arpInspectTrust = true; return [] }
         return ['% Invalid input detected']
       },
     },
@@ -543,11 +560,13 @@ function showArgHelp(cli, a) {
       { name: 'cdp', help: 'CDP information' },
       { name: 'lldp', help: 'LLDP information' },
       { name: 'ntp', help: 'Network time protocol' },
+      { name: 'access-lists', help: 'List access lists' },
       { name: 'version', help: 'System hardware and software status' },
     ]
     if (cli.dev.kind === 'switch') {
       opts.push({ name: 'vlan', help: 'VTP VLAN status' })
       opts.push({ name: 'etherchannel', help: 'EtherChannel information' })
+      opts.push({ name: 'port-security', help: 'Port security information' })
     }
     return opts
   }
@@ -590,7 +609,22 @@ function switchportArgHelp(cli, a) {
     { name: 'mode', help: 'Set trunking mode of the interface' },
     { name: 'access', help: 'Set access mode characteristics' },
     { name: 'trunk', help: 'Set trunking characteristics of the interface' },
+    { name: 'port-security', help: 'Security related command' },
   ]
+  if (a[0] === 'port-security') {
+    if (a.length === 1) return [
+      { name: 'maximum', help: 'Max secure addresses' },
+      { name: 'violation', help: 'Security violation mode' },
+      { name: 'mac-address', help: 'Secure MAC address' },
+      { name: '<cr>', help: '' },
+    ]
+    if (a[1] === 'violation') return [
+      { name: 'shutdown', help: 'Shut down the port' },
+      { name: 'restrict', help: 'Drop and log' },
+      { name: 'protect', help: 'Drop silently' },
+    ]
+    if (a[1] === 'mac-address') return [{ name: 'sticky', help: 'Dynamically learn and stick MACs' }]
+  }
   if (a[0] === 'mode') return [
     { name: 'access', help: 'Set trunking mode to ACCESS unconditionally' },
     { name: 'trunk', help: 'Set trunking mode to TRUNK unconditionally' },
@@ -685,6 +719,15 @@ function switchportCmd(cli, a) {
     }
     return ['% Incomplete command.']
   }
+  if (a[0] === 'port-security') {
+    if (!ifc.portSecurity) ifc.portSecurity = { enabled: false, maximum: 1, violation: 'shutdown', sticky: false }
+    const ps = ifc.portSecurity
+    if (a.length === 1) { ps.enabled = true; return [] }
+    if (a[1] === 'maximum') { const n = parseInt(a[2], 10); if (!n) return ['% Incomplete command.']; ps.maximum = n; return [] }
+    if (a[1] === 'violation') { if (!['shutdown', 'restrict', 'protect'].includes(a[2])) return ['% Invalid input detected']; ps.violation = a[2]; return [] }
+    if (a[1] === 'mac-address') { if ('sticky'.startsWith(a[2] || 'x')) { ps.sticky = true; return [] } return [] }
+    return ['% Incomplete command.']
+  }
   return ['% Invalid input detected']
 }
 
@@ -718,11 +761,57 @@ function ipConfigCmd(cli, a) {
       if (a[3]) cli.dev.dhcpExcluded.push(a[3]) // range end (simplified)
       return []
     }
+    if (a[1] === 'snooping') {
+      if (!a[2]) { cli.dev.dhcpSnooping.enabled = true; return [] }
+      if (a[2] === 'vlan') { addVlanList(cli.dev.dhcpSnooping.vlans, a[3]); return [] }
+      return []
+    }
     return ['% Incomplete command.']
   }
   // ip nat ...
   if (a[0] === 'nat') return ipNatCmd(cli, a.slice(1))
+  // ip arp inspection vlan <list>
+  if (a[0] === 'arp' && a[1] === 'inspection' && a[2] === 'vlan') {
+    addVlanList(cli.dev.arpInspection.vlans, a[3]); return []
+  }
   return ['% Invalid input detected']
+}
+
+function addVlanList(arr, spec) {
+  if (!spec) return
+  // supports "10" and "10,20" and "10-12"
+  for (const part of spec.split(',')) {
+    const m = part.match(/^(\d+)-(\d+)$/)
+    if (m) { for (let v = +m[1]; v <= +m[2]; v++) if (!arr.includes(v)) arr.push(v) }
+    else { const v = parseInt(part, 10); if (v && !arr.includes(v)) arr.push(v) }
+  }
+}
+
+// access-list <n> permit|deny ... — standard (1-99) or extended (100-199).
+function aclCmd(cli, a) {
+  const id = a[0]
+  const action = a[1]
+  const num = parseInt(id, 10)
+  if (!num || (action !== 'permit' && action !== 'deny')) return ['% Incomplete command.']
+  if (!cli.dev.acls[id]) cli.dev.acls[id] = []
+  const rest = a.slice(2)
+  if (num >= 1 && num <= 99) {
+    const { addr } = parseAclAddr(rest, 0)
+    cli.dev.acls[id].push({ kind: 'standard', action, src: addr })
+  } else {
+    const proto = rest[0]
+    const s = parseAclAddr(rest, 1)
+    const d = parseAclAddr(rest, s.next)
+    cli.dev.acls[id].push({ kind: 'extended', action, proto, src: s.addr, dst: d.addr })
+  }
+  return []
+}
+
+// Parse an address spec: "any" | "host A.B.C.D" | "A.B.C.D wildcard".
+function parseAclAddr(toks, i) {
+  if (toks[i] === 'any') return { addr: { any: true }, next: i + 1 }
+  if (toks[i] === 'host') return { addr: { ip: toks[i + 1], wildcard: '0.0.0.0' }, next: i + 2 }
+  return { addr: { ip: toks[i], wildcard: toks[i + 1] || '0.0.0.0' }, next: i + 2 }
 }
 
 function ipNatCmd(cli, a) {
@@ -817,6 +906,8 @@ function showCmd(cli, a) {
     return renderNtpStatus(cli.dev, cli.net)
   }
   if (sub === 'vlan') return renderVlanBrief(cli.dev)
+  if ('access-lists'.startsWith(sub) && sub.length >= 4) return renderAccessLists(cli.dev)
+  if ('port-security'.startsWith(sub) && sub.length >= 4) return renderPortSecurity(cli.dev)
   if (sub === 'cdp') {
     const s2 = (a[1] || '').toLowerCase()
     if ('neighbors'.startsWith(s2) && s2.length >= 1) {

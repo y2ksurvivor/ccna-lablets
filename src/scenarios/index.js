@@ -7,6 +7,9 @@ import { sshLab } from './ssh.js'
 import { ntpLab } from './ntp.js'
 import { dhcpLab } from './dhcp.js'
 import { natLab } from './nat.js'
+import { deviceHardening } from './device-hardening.js'
+import { aclLab } from './acl.js'
+import { l2Security } from './l2-security.js'
 
 // Registry of available lablets, grouped loosely by blueprint domain.
 export const scenarios = [
@@ -16,6 +19,8 @@ export const scenarios = [
   staticRouting, ospfLab,
   // IP Services (4.x)
   sshLab, ntpLab, dhcpLab, natLab,
+  // Security (5.x)
+  deviceHardening, aclLab, l2Security,
 ]
 
 export function getScenario(id) {

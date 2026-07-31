@@ -85,6 +85,60 @@ export function ifaceNatRole(net, devId, ifaceName, role) {
   return !!(ifc && ifc.natRole === role)
 }
 
+// --- Security checks ---------------------------------------------------------
+
+import { aclPermits } from './l3.js'
+
+export function hasEnableSecret(net, devId) {
+  return !!net.devices[devId]?.enableSecret
+}
+
+// A line (console/vty) is secured with a password and login checking.
+export function lineSecured(net, devId, type) {
+  const l = net.devices[devId]?.lines?.[type]
+  return !!(l && l.password && l.login)
+}
+
+export function servicePwEncryption(net, devId) {
+  return net.devices[devId]?.servicePasswordEncryption === true
+}
+
+// ACL logically permits / blocks a source (dst optional for extended).
+export function aclAllows(net, devId, aclId, srcIp, dstIp = '0.0.0.0') {
+  return aclPermits(net.devices[devId], aclId, srcIp, dstIp)
+}
+export function aclBlocks(net, devId, aclId, srcIp, dstIp = '0.0.0.0') {
+  return !aclPermits(net.devices[devId], aclId, srcIp, dstIp)
+}
+
+export function portSecured(net, devId, ifaceName, opts = {}) {
+  const d = net.devices[devId]
+  const i = d && d.interfaces[canonicalIface(ifaceName)]
+  const ps = i && i.portSecurity
+  if (!ps || !ps.enabled) return false
+  if (opts.maximum != null && ps.maximum !== opts.maximum) return false
+  if (opts.sticky && !ps.sticky) return false
+  if (opts.violation && ps.violation !== opts.violation) return false
+  return true
+}
+
+export function dhcpSnoopingOn(net, devId, vlan = null) {
+  const s = net.devices[devId]?.dhcpSnooping
+  return !!(s?.enabled && (vlan == null || s.vlans.includes(vlan)))
+}
+
+export function arpInspectionOn(net, devId, vlan = null) {
+  const a = net.devices[devId]?.arpInspection
+  return !!(a && (vlan == null || a.vlans.includes(vlan)))
+}
+
+export function ifaceTrusted(net, devId, ifaceName, kind) {
+  const d = net.devices[devId]
+  const i = d && d.interfaces[canonicalIface(ifaceName)]
+  if (!i) return false
+  return kind === 'dhcp' ? i.dhcpSnoopTrust === true : i.arpInspectTrust === true
+}
+
 // --- discovery protocol checks ----------------------------------------------
 
 export function discoverySeesNeighbor(net, devId, proto, neighborId) {

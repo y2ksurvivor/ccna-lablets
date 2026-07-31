@@ -5,7 +5,7 @@
 // resolution to neighbor() lookups.
 
 import { getInterface } from './device.js'
-import { neighbor, l2HostReach } from './network.js'
+import { neighbor, l2HostReach, floodVlan } from './network.js'
 
 // --- address math ------------------------------------------------------------
 
@@ -107,8 +107,10 @@ export function ownerOfIp(net, ip) {
   return null
 }
 
-// Router adjacent to routerId that owns nextHopIp (in a directly connected subnet).
-function adjacentRouterOwning(net, routerId, nextHopIp) {
+// Resolve a next-hop IP to { nextRouter, exitPort, ingressPort } across a
+// directly connected subnet. Also used to know which interface a packet exits
+// (for outbound ACLs) and which it enters on the neighbor (for inbound ACLs).
+function resolveNextHop(net, routerId, nextHopIp) {
   const dev = net.devices[routerId]
   const nh = ipToInt(nextHopIp)
   for (const ifc of Object.values(dev.interfaces)) {
@@ -120,55 +122,91 @@ function adjacentRouterOwning(net, routerId, nextHopIp) {
     const nbDev = net.devices[nb.devId]
     if (!nbDev || nbDev.kind === 'host') continue
     const nbIfc = getInterface(nbDev, nb.port)
-    if (nbIfc && nbIfc.ip === nextHopIp && !nbIfc.shutdown) return nbDev.id
+    if (nbIfc && nbIfc.ip === nextHopIp && !nbIfc.shutdown) {
+      return { nextRouter: nbDev.id, exitPort: ifc.name, ingressPort: nbIfc.name }
+    }
   }
   return null
 }
 
-// Deliver destIp on a directly connected interface: the neighbor must own it.
+// --- ACL evaluation ----------------------------------------------------------
+
+function addrMatches(addr, ip) {
+  if (!addr || addr.any) return true
+  if (!ip) return false
+  const wc = ipToInt(addr.wildcard || '0.0.0.0')
+  const mask = (~wc) >>> 0
+  return ((ipToInt(ip) & mask) >>> 0) === ((ipToInt(addr.ip) & mask) >>> 0)
+}
+
+function aclEntryMatches(e, srcIp, destIp) {
+  if (!addrMatches(e.src, srcIp)) return false
+  if (e.kind === 'extended' && e.dst && !addrMatches(e.dst, destIp)) return false
+  return true
+}
+
+// Does ACL `aclId` on `dev` permit this packet? An undefined/empty ACL permits;
+// a defined ACL ends in an implicit deny.
+export function aclPermits(dev, aclId, srcIp, destIp) {
+  if (!aclId) return true
+  const entries = dev.acls?.[aclId]
+  if (!entries || !entries.length) return true
+  for (const e of entries) {
+    if (aclEntryMatches(e, srcIp, destIp)) return e.action === 'permit'
+  }
+  return false
+}
+
+// Deliver destIp on a directly connected interface. The wire may lead to a
+// host, another router, or a switched segment (flood the VLAN to find the host).
 function connectedDelivers(net, routerId, ifaceName, destIp) {
   const nb = neighbor(net, routerId, ifaceName)
-  if (!nb) {
-    // No neighbor on the wire, but the router itself may own destIp.
-    return false
-  }
+  if (!nb) return false
   const nbDev = net.devices[nb.devId]
   if (!nbDev) return false
   if (nbDev.kind === 'host') return nbDev.ip === destIp && !!nbDev.ip
+  if (nbDev.kind === 'switch') {
+    const entryIfc = getInterface(nbDev, nb.port)
+    const vlan = entryIfc && entryIfc.mode === 'access' ? (entryIfc.accessVlan || 1) : 1
+    for (const hid of floodVlan(net, nbDev.id, vlan)) {
+      if (net.devices[hid]?.ip === destIp) return true
+    }
+    return false
+  }
   const nbIfc = getInterface(nbDev, nb.port)
   return !!(nbIfc && nbIfc.ip === destIp && !nbIfc.shutdown)
 }
 
 // --- forwarding --------------------------------------------------------------
 
-// Can routerId deliver a packet to destIp? Follows the routing table hop by hop.
-export function forwardFrom(net, routerId, destIp, ttl = 16) {
+// Can routerId deliver a packet to destIp? Follows the routing table hop by hop,
+// enforcing inbound ACLs (on the arrival interface) and outbound ACLs (on the
+// exit interface). srcIp enables ACL checks; pass null for control-plane checks.
+export function forwardFrom(net, routerId, destIp, srcIp = null, ingressIface = null, ttl = 16) {
   if (ttl <= 0) return false
   const dev = net.devices[routerId]
   if (!dev) return false
+  // Inbound ACL on the interface the packet arrived on.
+  if (srcIp && ingressIface) {
+    const inIfc = getInterface(dev, ingressIface)
+    if (inIfc && !aclPermits(dev, inIfc.accessGroupIn, srcIp, destIp)) return false
+  }
   // Router owns the destination itself?
   for (const ifc of Object.values(dev.interfaces)) {
     if (ifc.ip === destIp && !ifc.shutdown) return true
   }
   const route = routeLookup(net, dev, destIp)
   if (!route) return false
-  if (route.connected) return connectedDelivers(net, routerId, route.iface, destIp)
-  const nextRouter = adjacentRouterOwning(net, routerId, route.nextHop)
-  if (!nextRouter) return false
-  return forwardFrom(net, nextRouter, destIp, ttl - 1)
-}
-
-// The router that is a host's default gateway (owns the gateway IP on the wire).
-function hostGatewayRouter(net, hostId) {
-  const host = net.devices[hostId]
-  if (!host || !host.gateway) return null
-  const nb = neighbor(net, hostId, host.nic)
-  if (!nb) return null
-  const dev = net.devices[nb.devId]
-  if (!dev || dev.kind === 'host') return null
-  const ifc = getInterface(dev, nb.port)
-  if (ifc && ifc.ip === host.gateway && !ifc.shutdown) return dev.id
-  return null
+  if (route.connected) {
+    const exitIfc = getInterface(dev, route.iface)
+    if (srcIp && exitIfc && !aclPermits(dev, exitIfc.accessGroupOut, srcIp, destIp)) return false
+    return connectedDelivers(net, routerId, route.iface, destIp)
+  }
+  const hop = resolveNextHop(net, routerId, route.nextHop)
+  if (!hop) return false
+  const exitIfc = getInterface(dev, hop.exitPort)
+  if (srcIp && exitIfc && !aclPermits(dev, exitIfc.accessGroupOut, srcIp, destIp)) return false
+  return forwardFrom(net, hop.nextRouter, destIp, srcIp, hop.ingressPort, ttl - 1)
 }
 
 function sameSubnet(aIp, bIp, mask) {
@@ -194,9 +232,16 @@ function hostForward(net, hostId, destIp) {
     // Otherwise fall back to switched L2 reachability (VLAN scenarios).
     return l2HostReach(net, hostId, destIp).ok
   }
-  const gw = hostGatewayRouter(net, hostId)
-  if (!gw) return false
-  return forwardFrom(net, gw, destIp)
+  // Enter the gateway router on the interface that owns the gateway IP (which
+  // may sit across a switched segment), carrying the real source IP so ACLs
+  // along the path can match it.
+  if (!host.gateway) return false
+  const gwOwner = ownerOfIp(net, host.gateway)
+  if (!gwOwner || gwOwner.host) return false
+  const gwDev = net.devices[gwOwner.devId]
+  const gwIfc = getInterface(gwDev, gwOwner.iface)
+  if (!gwIfc || gwIfc.shutdown) return false
+  return forwardFrom(net, gwDev.id, destIp, host.ip, gwIfc.name)
 }
 
 // Unified host ping used everywhere: same-subnet L2 (incl. VLANs) or routed
