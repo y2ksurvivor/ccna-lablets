@@ -54,6 +54,7 @@ export function createDevice(opts = {}) {
     // L3 state
     routes: [], // static routes: { proto, prefix, mask, nextHop, ad, metric }
     ospf: null, // { pid, routerId, networks: [{ip, wildcard, area}], passive: [] }
+    ipv6Routing: false, // ipv6 unicast-routing
     arp: {}, // ip -> mac
     // Global config
     enableSecret: null,
@@ -95,6 +96,7 @@ export function getInterface(dev, name) {
       mac: nextMac(),
       ip: null,
       mask: null,
+      ipv6: [], // ['2001:db8:acad:1::1/64', ...]
       // Switch access ports come up by default; router ports are admin-down.
       shutdown: dev.kind !== 'switch',
       description: null,

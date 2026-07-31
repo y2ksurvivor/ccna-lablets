@@ -14,12 +14,13 @@
 //   router    (config-router)#     routing protocol sub-config
 
 import { getInterface, canonicalIface, shortIface } from './device.js'
+import { pingIpv6 } from './ipv6.js'
 import {
   renderRunningConfig, renderIpIntBrief, renderVlanBrief,
   renderCdpNeighbors, renderLldpNeighbors, renderEtherchannelSummary,
   renderIpRoute, renderOspfNeighbors,
   renderIpSsh, renderNtpStatus, renderNtpAssociations, renderNatTranslations,
-  renderAccessLists, renderPortSecurity,
+  renderAccessLists, renderPortSecurity, renderIpv6IntBrief,
 } from './show.js'
 
 export class CLI {
@@ -288,6 +289,14 @@ const COMMANDS = {
         return ['% Incomplete command.']
       },
     },
+    'ipv6': {
+      help: 'Global IPv6 configuration',
+      argHelp: () => [{ name: 'unicast-routing', help: 'Enable unicast routing' }],
+      run: (cli, a) => {
+        if ('unicast-routing'.startsWith(a[0] || 'x')) { cli.dev.ipv6Routing = true; return [] }
+        return ['% Incomplete command.']
+      },
+    },
     'ip': {
       help: 'Global IP configuration',
       argHelp: (cli, a) => {
@@ -445,6 +454,25 @@ const COMMANDS = {
     'description': { help: 'Interface description', argHelp: () => [{ name: 'LINE', help: 'Up to 240 characters describing this interface' }], run: (cli, a) => { cli.ctx.iface.description = a.join(' '); return [] } },
     'shutdown': { help: 'Shut down interface', run: (cli) => { cli.ctx.iface.shutdown = true; cli.ctx.iface.lineProtocol = false; return [] } },
     'switchport': { help: 'Set switching mode', argHelp: switchportArgHelp, run: (cli, a) => switchportCmd(cli, a) },
+    'ipv6': {
+      help: 'IPv6 interface subcommands',
+      argHelp: (cli, a) => a.length === 0
+        ? [{ name: 'address', help: 'Configure IPv6 address on interface' }, { name: 'enable', help: 'Enable IPv6 on interface' }]
+        : [{ name: 'X:X:X:X::X/<0-128>', help: 'IPv6 prefix' }],
+      run: (cli, a) => {
+        if ('enable'.startsWith(a[0] || 'x')) return []
+        if (a[0] === 'address') {
+          const spec = a[1]
+          if (!spec) return ['% Incomplete command.']
+          if ((a[2] || '').toLowerCase() === 'link-local') { return [] } // accepted, not tracked
+          if (!spec.includes('/')) return ['% Incomplete command.']
+          const list = cli.ctx.iface.ipv6
+          if (!list.includes(spec)) list.push(spec)
+          return []
+        }
+        return ['% Invalid input detected']
+      },
+    },
     'cdp': {
       help: 'CDP interface subcommands',
       argHelp: () => [{ name: 'enable', help: 'Enable CDP on interface' }],
@@ -560,6 +588,7 @@ function showArgHelp(cli, a) {
       { name: 'cdp', help: 'CDP information' },
       { name: 'lldp', help: 'LLDP information' },
       { name: 'ntp', help: 'Network time protocol' },
+      { name: 'ipv6', help: 'IPv6 information' },
       { name: 'access-lists', help: 'List access lists' },
       { name: 'version', help: 'System hardware and software status' },
     ]
@@ -906,6 +935,11 @@ function showCmd(cli, a) {
     return renderNtpStatus(cli.dev, cli.net)
   }
   if (sub === 'vlan') return renderVlanBrief(cli.dev)
+  if (sub === 'ipv6') {
+    const s2 = (a[1] || '').toLowerCase()
+    if ('interface'.startsWith(s2) && s2.length >= 1 && 'brief'.startsWith((a[2] || 'x').toLowerCase())) return renderIpv6IntBrief(cli.dev)
+    return renderIpv6IntBrief(cli.dev)
+  }
   if ('access-lists'.startsWith(sub) && sub.length >= 4) return renderAccessLists(cli.dev)
   if ('port-security'.startsWith(sub) && sub.length >= 4) return renderPortSecurity(cli.dev)
   if (sub === 'cdp') {
@@ -946,6 +980,12 @@ function pingCmd(cli, a) {
   ]
   if (!cli.net) {
     return [...header, `.....`, `Success rate is 0 percent (0/5)`]
+  }
+  // IPv6 target (contains ':') — same-link reachability.
+  if (target.includes(':')) {
+    const res6 = pingIpv6(cli.net, cli.dev.id, target)
+    return [...header, res6.ok ? '!!!!!' : '.....',
+      `Success rate is ${res6.ok ? 100 : 0} percent (${res6.ok ? '5/5' : '0/5'})`]
   }
   // A switch/router pings from itself. We approximate by treating any device
   // interface IP in the destination's subnet as the source. Full L3 ping from

@@ -139,6 +139,34 @@ export function ifaceTrusted(net, devId, ifaceName, kind) {
   return kind === 'dhcp' ? i.dhcpSnoopTrust === true : i.arpInspectTrust === true
 }
 
+// --- Addressing checks (IPv4 + IPv6) -----------------------------------------
+
+// Interface has exactly this IPv4 address+mask and is up.
+export function ifaceHasIp(net, devId, ifaceName, ip, mask) {
+  const d = net.devices[devId]
+  const i = d && d.interfaces[canonicalIface(ifaceName)]
+  return !!(i && i.ip === ip && i.mask === mask && !i.shutdown)
+}
+
+import { normIpv6, pingIpv6 } from './ipv6.js'
+
+// Interface carries this IPv6 address (any prefix length match on the address).
+export function ifaceHasIpv6(net, devId, ifaceName, addr) {
+  const d = net.devices[devId]
+  const i = d && d.interfaces[canonicalIface(ifaceName)]
+  if (!i || i.shutdown) return false
+  const target = normIpv6(addr)
+  return (i.ipv6 || []).some(a => normIpv6(a) === target)
+}
+
+export function ipv6PingWorks(net, srcDevId, target) {
+  return pingIpv6(net, srcDevId, target).ok
+}
+
+export function ipv6RoutingOn(net, devId) {
+  return net.devices[devId]?.ipv6Routing === true
+}
+
 // --- discovery protocol checks ----------------------------------------------
 
 export function discoverySeesNeighbor(net, devId, proto, neighborId) {

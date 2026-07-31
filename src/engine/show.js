@@ -11,6 +11,7 @@ export function renderRunningConfig(dev) {
   const out = ['Building configuration...', '', 'Current configuration:', '!']
   if (dev.servicePasswordEncryption) out.push('service password-encryption', '!')
   out.push(`hostname ${dev.hostname}`, '!')
+  if (dev.ipv6Routing) out.push('ipv6 unicast-routing', '!')
   if (dev.enableSecret) out.push(`enable secret ${dev.enableSecret}`)
   if (dev.enablePassword) out.push(`enable password ${dev.enablePassword}`)
   if (dev.enableSecret || dev.enablePassword) out.push('!')
@@ -62,6 +63,7 @@ export function renderRunningConfig(dev) {
     }
     if (ifc.addressMode === 'dhcp') out.push(' ip address dhcp')
     else if (ifc.ip) out.push(` ip address ${ifc.ip} ${ifc.mask}`)
+    for (const a of (ifc.ipv6 || [])) out.push(` ipv6 address ${a}`)
     if (ifc.natRole) out.push(` ip nat ${ifc.natRole}`)
     if (ifc.helperAddress) out.push(` ip helper-address ${ifc.helperAddress}`)
     if (ifc.accessGroupIn) out.push(` ip access-group ${ifc.accessGroupIn} in`)
@@ -148,6 +150,19 @@ export function renderIpIntBrief(dev) {
     ])
   }
   return formatColumns(rows)
+}
+
+export function renderIpv6IntBrief(dev) {
+  const out = []
+  for (const ifc of Object.values(dev.interfaces)) {
+    const status = ifc.shutdown ? 'administratively down' : (ifc.lineProtocol ? 'up' : 'down')
+    const proto = ifc.lineProtocol && !ifc.shutdown ? 'up' : 'down'
+    out.push(`${ifc.name.padEnd(22)} [${status}/${proto}]`)
+    for (const a of (ifc.ipv6 || [])) out.push(`    ${a.split('/')[0]}`)
+    if (!(ifc.ipv6 || []).length) out.push('    unassigned')
+  }
+  if (!out.length) out.push('(no interfaces)')
+  return out
 }
 
 export function renderVlanBrief(dev) {
