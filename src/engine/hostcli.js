@@ -3,7 +3,7 @@
 // host's IP settings. Shares the Terminal's execute()/prompt() shape so the
 // same component drives it.
 
-import { ping } from './network.js'
+import { ping } from './l3.js'
 
 export class HostCLI {
   constructor(host, net) {

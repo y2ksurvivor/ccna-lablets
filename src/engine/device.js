@@ -52,7 +52,8 @@ export function createDevice(opts = {}) {
     vlans: kind === 'switch' ? { 1: { id: 1, name: 'default' } } : {},
     macTable: {}, // mac -> { iface, vlan }
     // L3 state
-    routes: [], // { proto, prefix, mask, nextHop, iface, ad, metric }
+    routes: [], // static routes: { proto, prefix, mask, nextHop, ad, metric }
+    ospf: null, // { pid, routerId, networks: [{ip, wildcard, area}], passive: [] }
     arp: {}, // ip -> mac
     // Global config
     enableSecret: null,

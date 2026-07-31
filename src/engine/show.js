@@ -4,6 +4,7 @@
 
 import { discoveryNeighbors, etherchannelUp } from './network.js'
 import { getInterface } from './device.js'
+import { routingTable, ospfNeighbors, maskToLen } from './l3.js'
 
 export function renderRunningConfig(dev) {
   const out = ['Building configuration...', '', 'Current configuration:', '!']
@@ -39,8 +40,16 @@ export function renderRunningConfig(dev) {
     out.push('!')
   }
 
+  if (dev.ospf) {
+    out.push(`router ospf ${dev.ospf.pid}`)
+    if (dev.ospf.routerId) out.push(` router-id ${dev.ospf.routerId}`)
+    for (const n of dev.ospf.networks) out.push(` network ${n.ip} ${n.wildcard} area ${n.area}`)
+    for (const p of (dev.ospf.passive || [])) out.push(` passive-interface ${p}`)
+    out.push('!')
+  }
+
   for (const r of dev.routes) {
-    out.push(`ip route ${r.prefix} ${r.mask} ${r.nextHop}`)
+    out.push(`ip route ${r.prefix} ${r.mask} ${r.nextHop}${r.ad && r.ad !== 1 ? ' ' + r.ad : ''}`)
   }
   if (dev.routes.length) out.push('!')
 
@@ -145,6 +154,45 @@ export function renderEtherchannelSummary(dev, net) {
     }).join(' ')
     out.push(`${String(po.id).padEnd(6)} Po${String(po.id).padEnd(11)} ${(proto).padEnd(11)} ${ports}`)
   }
+  return out
+}
+
+export function renderIpRoute(dev, net) {
+  if (dev.kind !== 'router') return ['% This command is available on routers']
+  const table = routingTable(net, dev)
+  const out = [
+    'Codes: C - connected, S - static, O - OSPF, * - candidate default',
+    '',
+  ]
+  const def = table.find(r => r.netInt === 0 && r.maskInt === 0)
+  out.push(def
+    ? `Gateway of last resort is ${def.nextHop || '0.0.0.0'} to network 0.0.0.0`
+    : 'Gateway of last resort is not set')
+  out.push('')
+
+  table.sort((a, b) => (a.netInt >>> 0) - (b.netInt >>> 0))
+  for (const r of table) {
+    const len = maskToLen(r.mask)
+    const prefix = `${r.prefix}/${len}`
+    if (r.connected) {
+      const ifc = getInterface(dev, r.iface)
+      out.push(`C        ${prefix} is directly connected, ${ifc ? ifc.shortName : r.iface}`)
+    } else {
+      out.push(`${r.proto}        ${prefix} [${r.ad}/${r.metric}] via ${r.nextHop}`)
+    }
+  }
+  if (table.length === 0) out.push('(routing table is empty)')
+  return out
+}
+
+export function renderOspfNeighbors(dev, net) {
+  if (!dev.ospf) return ['% OSPF is not running']
+  const nbrs = ospfNeighbors(net, dev.id)
+  const out = ['Neighbor ID     Pri   State           Dead Time   Address         Interface']
+  for (const n of nbrs) {
+    out.push(`${n.id.padEnd(15)} 1     FULL/BDR        00:00:35    ${n.ip.padEnd(15)} `)
+  }
+  if (!nbrs.length) out.push('(no OSPF neighbors — check network statements, areas, and interface state)')
   return out
 }
 

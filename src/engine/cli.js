@@ -17,6 +17,7 @@ import { getInterface, canonicalIface, shortIface } from './device.js'
 import {
   renderRunningConfig, renderIpIntBrief, renderVlanBrief,
   renderCdpNeighbors, renderLldpNeighbors, renderEtherchannelSummary,
+  renderIpRoute, renderOspfNeighbors,
 } from './show.js'
 
 export class CLI {
@@ -288,6 +289,21 @@ const COMMANDS = {
       },
       run: (cli, a) => ipConfigCmd(cli, a),
     },
+    'router': {
+      help: 'Enable a routing process',
+      argHelp: (cli, a) => a.length === 0
+        ? [{ name: 'ospf', help: 'Open Shortest Path First (OSPF)' }]
+        : [{ name: '<1-65535>', help: 'Process ID' }],
+      run: (cli, a) => {
+        if (!'ospf'.startsWith(a[0] || 'x')) return ['% Invalid input detected']
+        const pid = parseInt(a[1], 10)
+        if (!pid) return ['% Incomplete command.']
+        if (!cli.dev.ospf) cli.dev.ospf = { pid, routerId: null, networks: [], passive: [] }
+        cli.ctx.ospf = cli.dev.ospf
+        cli.mode = 'router'
+        return []
+      },
+    },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
     exit: { help: 'Exit config mode', run: (cli) => { cli.mode = 'enable'; return [] } },
     end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
@@ -362,6 +378,32 @@ const COMMANDS = {
   },
 
   router: {
+    network: {
+      help: 'Enable routing on an IP network',
+      argHelp: (cli, a) => {
+        if (a.length === 0) return [{ name: 'A.B.C.D', help: 'Network number' }]
+        if (a.length === 1) return [{ name: 'A.B.C.D', help: 'OSPF wildcard bits' }]
+        if (a.length === 2) return [{ name: 'area', help: 'Set the OSPF area ID' }]
+        if (a.length === 3) return [{ name: '<0-4294967295>', help: 'OSPF area ID' }]
+        return [{ name: '<cr>', help: '' }]
+      },
+      run: (cli, a) => networkCmd(cli, a),
+    },
+    'router-id': {
+      help: 'Configure router identifier',
+      argHelp: () => [{ name: 'A.B.C.D', help: 'OSPF router-id in IP address format' }],
+      run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.dev.ospf.routerId = a[0]; return [] },
+    },
+    'passive-interface': {
+      help: 'Suppress routing updates on an interface',
+      run: (cli, a) => {
+        if (!a[0]) return ['% Incomplete command.']
+        const canon = canonicalIface(a.join('')) || a.join(' ')
+        if (!cli.dev.ospf.passive.includes(canon)) cli.dev.ospf.passive.push(canon)
+        return []
+      },
+    },
+    'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
     exit: { help: 'Exit router config', run: (cli) => { cli.mode = 'config'; return [] } },
     end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
   },
@@ -389,8 +431,10 @@ function showArgHelp(cli, a) {
     if (a.length === 1) return [
       { name: 'interface', help: 'IP interface status and configuration' },
       { name: 'route', help: 'IP routing table' },
+      { name: 'ospf', help: 'OSPF information' },
     ]
     if (a[1] === 'interface') return [{ name: 'brief', help: 'Brief summary of IP status' }]
+    if (a[1] === 'ospf') return [{ name: 'neighbor', help: 'OSPF neighbor list' }]
   }
   if (a[0] === 'cdp') return [{ name: 'neighbors', help: 'CDP neighbor entries' }]
   if (a[0] === 'cdp' && a[1] === 'neighbors') return [{ name: 'detail', help: 'Detailed neighbor information' }]
@@ -518,14 +562,28 @@ function switchportCmd(cli, a) {
 }
 
 function ipConfigCmd(cli, a) {
-  // ip route <prefix> <mask> <next-hop>
+  // ip route <prefix> <mask> <next-hop> [ad]
   if (a[0] === 'route') {
     const [prefix, mask, nh] = [a[1], a[2], a[3]]
     if (!prefix || !mask || !nh) return ['% Incomplete command.']
-    cli.dev.routes.push({ proto: 'S', prefix, mask, nextHop: nh, ad: 1, metric: 0 })
+    const ad = a[4] ? parseInt(a[4], 10) : 1
+    // De-dup identical routes; a floating static uses a higher AD.
+    cli.dev.routes = cli.dev.routes.filter(r => !(r.prefix === prefix && r.mask === mask && r.nextHop === nh))
+    cli.dev.routes.push({ proto: 'S', prefix, mask, nextHop: nh, ad, metric: 0 })
     return []
   }
   return ['% Invalid input detected']
+}
+
+function networkCmd(cli, a) {
+  // network <ip> <wildcard> area <id>
+  const [ip, wc] = [a[0], a[1]]
+  if (!ip || !wc) return ['% Incomplete command.']
+  if (!'area'.startsWith(a[2] || 'x')) return ['% Invalid input detected']
+  const area = parseInt(a[3], 10)
+  if (Number.isNaN(area)) return ['% Incomplete command.']
+  cli.dev.ospf.networks.push({ ip, wildcard: wc, area })
+  return []
 }
 
 function showCmd(cli, a) {
@@ -535,7 +593,12 @@ function showCmd(cli, a) {
   if (sub === 'ip') {
     const s2 = (a[1] || '').toLowerCase()
     if ('interface'.startsWith(s2) && a[2] && 'brief'.startsWith((a[2] || '').toLowerCase())) return renderIpIntBrief(cli.dev)
-    if ('route'.startsWith(s2)) return ['(ip routing table — arrives with the routing phase)']
+    if ('route'.startsWith(s2) && s2.length >= 1) return renderIpRoute(cli.dev, cli.net)
+    if ('ospf'.startsWith(s2) && s2.length >= 1) {
+      const s3 = (a[2] || '').toLowerCase()
+      if ('neighbor'.startsWith(s3) && s3.length >= 1) return renderOspfNeighbors(cli.dev, cli.net)
+      return [`Routing Process "ospf ${cli.dev.ospf?.pid ?? ''}" with ID ${cli.dev.ospf?.routerId ?? '(unset)'}`]
+    }
   }
   if (sub === 'vlan') return renderVlanBrief(cli.dev)
   if (sub === 'cdp') {

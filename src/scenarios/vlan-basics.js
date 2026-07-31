@@ -8,7 +8,8 @@
 // The learner must create VLANs 10/20 on both switches, place each PC's access
 // port in the right VLAN, and trunk the SW1–SW2 link so the VLANs span both.
 
-import { createNetwork, addDevice, addLink, ping } from '../engine/network.js'
+import { createNetwork, addDevice, addLink } from '../engine/network.js'
+import { ping } from '../engine/l3.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'

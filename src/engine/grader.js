@@ -27,6 +27,27 @@ export function scorePct(results) {
 import { getInterface, canonicalIface } from './device.js'
 import { renderRunningConfig } from './show.js'
 import { discoveryNeighbors, etherchannelUp } from './network.js'
+import { ping, routeLookup, ospfNeighbors } from './l3.js'
+
+// --- L3 / routing checks -----------------------------------------------------
+
+export function pingWorks(net, srcHostId, destIp) {
+  return ping(net, srcHostId, destIp).ok
+}
+
+// Does devId have a route that covers destIp? Optionally require a protocol
+// ('C' connected, 'S' static, 'O' OSPF).
+export function routeCovers(net, devId, destIp, proto = null) {
+  const dev = net.devices[devId]
+  if (!dev) return false
+  const r = routeLookup(net, dev, destIp)
+  if (!r) return false
+  return proto ? r.proto === proto : true
+}
+
+export function ospfAdjacent(net, devId, neighborId) {
+  return ospfNeighbors(net, devId).some(n => n.id === neighborId)
+}
 
 // --- discovery protocol checks ----------------------------------------------
 

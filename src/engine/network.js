@@ -190,9 +190,24 @@ function sameSubnet(ipA, ipB, mask) {
   return true
 }
 
+// L2 host-to-host reachability within a VLAN (used for same-subnet delivery
+// across switches). Returns { ok, reason }. Does not check subnetting — callers
+// decide when L2 delivery applies.
+export function l2HostReach(net, srcId, dstIp) {
+  const src = net.devices[srcId]
+  if (!src || src.kind !== 'host' || !src.ip) return { ok: false, reason: 'source has no IP' }
+  const dst = Object.values(net.devices).find(d => d.kind === 'host' && d.ip === dstIp)
+  if (!dst) return { ok: false, reason: 'destination unknown' }
+  const sv = hostVlan(net, srcId)
+  if (!sv) return { ok: false, reason: 'source port down or not access' }
+  const reached = floodVlan(net, sv.switchId, sv.vlan)
+  return reached.has(dst.id)
+    ? { ok: true, reason: 'reply' }
+    : { ok: false, reason: 'no L2 path in VLAN ' + sv.vlan }
+}
+
 // Can host `srcId` reach IP `dstIp`? Returns { ok, reason }.
-// Same-subnet L2 path only (this phase). Requires: both hosts up on the same
-// VLAN with an L2 path between them, and addressed in the same subnet.
+// Same-subnet L2 path only. Superseded by l3.ping for cross-subnet routing.
 export function ping(net, srcId, dstIp) {
   const src = net.devices[srcId]
   if (!src || src.kind !== 'host') return { ok: false, reason: 'no source host' }
