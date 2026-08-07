@@ -13,8 +13,9 @@
 //   line      (config-line)#       line sub-config
 //   router    (config-router)#     routing protocol sub-config
 
-import { getInterface, canonicalIface, shortIface, observe } from './device.js'
+import { getInterface, canonicalIface, shortIface, observe, logIfaceState } from './device.js'
 import { pingIpv6 } from './ipv6.js'
+import { pingFromDevice as devicePing } from './l3.js'
 import {
   renderRunningConfig, renderIpIntBrief, renderVlanBrief,
   renderCdpNeighbors, renderLldpNeighbors, renderEtherchannelSummary, renderInterfacesTrunk,
@@ -487,7 +488,15 @@ const COMMANDS = {
       },
     },
     'description': { help: 'Interface description', argHelp: () => [{ name: 'LINE', help: 'Up to 240 characters describing this interface' }], run: (cli, a) => { cli.ctx.iface.description = a.join(' '); return [] } },
-    'shutdown': { help: 'Shut down interface', noArgs: true, run: (cli) => { cli.ctx.iface.shutdown = true; cli.ctx.iface.lineProtocol = false; return [] } },
+    'shutdown': {
+      help: 'Shut down interface', noArgs: true,
+      run: (cli) => {
+        const i = cli.ctx.iface
+        const [wasShut, hadProto] = [i.shutdown, i.lineProtocol]
+        i.shutdown = true; i.lineProtocol = false
+        return logIfaceState(cli.dev, i, wasShut, hadProto)
+      },
+    },
     'switchport': { help: 'Set switching mode', argHelp: switchportArgHelp, run: (cli, a) => switchportCmd(cli, a) },
     'ipv6': {
       help: 'IPv6 interface subcommands',
@@ -755,7 +764,14 @@ function negate(cli, a) {
     if (name === 'dns-server') { cli.ctx.dhcpPool.dnsServer = null; return [] }
   }
   if (cli.mode === 'iface') {
-    if (name === 'shutdown') { cli.ctx.iface.shutdown = false; cli.ctx.iface.lineProtocol = !!cli.ctx.iface.ip || cli.dev.kind === 'switch'; return [] }
+    if (name === 'shutdown') {
+      const i = cli.ctx.iface
+      const [wasShut, hadProto] = [i.shutdown, i.lineProtocol]
+      i.shutdown = false
+      // Line protocol only comes up if the port is actually cabled.
+      i.lineProtocol = !!i.connected && (!!i.ip || cli.dev.kind === 'switch')
+      return logIfaceState(cli.dev, i, wasShut, hadProto)
+    }
     if (name === 'ip' && 'address'.startsWith(a[1] || 'x') && a[1]) { cli.ctx.iface.ip = null; cli.ctx.iface.mask = null; return [] }
     if (name === 'description') { cli.ctx.iface.description = null; return [] }
     if (name === 'cdp' && 'enable'.startsWith(a[1] || 'x')) { cli.ctx.iface.cdpEnabled = false; return [] }
@@ -1080,11 +1096,9 @@ function showCmd(cli, a) {
   return cli.invalid(KNOWN_SHOW_ROOTS.has(sub) && a[1] ? a[1] : a[0])
 }
 
-// Device-sourced ping. Switches/routers need an IP interface in the target's
-// subnet to source the echo; full L3 device ping (routing table lookup) lands
-// in the IP Connectivity phase. For now, verify VLAN lablets from the PCs.
+// Device-sourced ping — delegates to the routing engine (see l3.js).
 function pingFromDevice(net, dev, target) {
-  return { ok: false, reason: 'device-sourced ping arrives with the routing phase' }
+  return devicePing(net, dev.id, target)
 }
 
 function pingCmd(cli, a) {
@@ -1112,9 +1126,10 @@ function pingCmd(cli, a) {
   // network devices comes with the routing phase; hosts use the host console.
   const res = pingFromDevice(cli.net, cli.dev, target)
   const marks = res.ok ? '!!!!!' : '.....'
-  const pct = res.ok ? 100 : 0
-  const n = res.ok ? '5/5' : '0/5'
-  return [...header, marks, `Success rate is ${pct} percent (${n})`]
+  const stats = res.ok
+    ? 'Success rate is 100 percent (5/5), round-trip min/avg/max = 1/2/4 ms'
+    : 'Success rate is 0 percent (0/5)'
+  return [...header, marks, stats]
 }
 
 // --- parsing utilities -------------------------------------------------------

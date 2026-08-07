@@ -99,6 +99,32 @@ export function observe(dev, key) {
   dev.observed[key] = (dev.observed[key] || 0) + 1
 }
 
+// IOS logs interface state changes to the console. Timestamps count from a
+// per-device boot clock that advances a second per message, so output stays
+// deterministic (no wall clock) while still looking like a real log line.
+export function logIfaceState(dev, ifc, wasShut, hadProto) {
+  const out = []
+  if (!dev || !ifc) return out
+  const stamp = () => {
+    dev.logSeconds = (dev.logSeconds ?? 0) + 1
+    const s = dev.logSeconds
+    const mm = String(Math.floor(s / 60)).padStart(2, '0')
+    const ss = String(s % 60).padStart(2, '0')
+    return `*Mar  1 00:${mm}:${ss}.000:`
+  }
+  if (wasShut !== ifc.shutdown) {
+    out.push(ifc.shutdown
+      // Admin-down is LINK-5-CHANGED; coming up is LINK-3-UPDOWN.
+      ? `${stamp()} %LINK-5-CHANGED: Interface ${ifc.name}, changed state to administratively down`
+      : `${stamp()} %LINK-3-UPDOWN: Interface ${ifc.name}, changed state to up`)
+  }
+  const proto = !!ifc.lineProtocol && !ifc.shutdown
+  if (!!hadProto !== proto) {
+    out.push(`${stamp()} %LINEPROTO-5-UPDOWN: Line protocol on Interface ${ifc.name}, changed state to ${proto ? 'up' : 'down'}`)
+  }
+  return out
+}
+
 export function hasObserved(dev, key) {
   return !!dev && (dev.observed?.[key] || 0) > 0
 }

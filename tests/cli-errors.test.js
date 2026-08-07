@@ -37,10 +37,10 @@ describe('no-argument commands reject trailing tokens', () => {
   it('bare "shutdown" and its abbreviation still work', () => {
     const { cli, ifc } = router()
     cli.execute('no shutdown')
-    expect(cli.execute('shutdown')).toEqual([])
+    expect(cli.execute('shutdown').join('\n')).toMatch(/administratively down/)
     expect(ifc().shutdown).toBe(true)
     cli.execute('no shutdown')
-    expect(cli.execute('sh')).toEqual([])
+    expect(cli.execute('sh').join('\n')).toMatch(/administratively down/)
     expect(ifc().shutdown).toBe(true)
   })
 
@@ -84,6 +84,44 @@ describe('parse errors always use the IOS caret form', () => {
     const src = await import('node:fs')
     const code = src.readFileSync(new URL('../src/engine/cli.js', import.meta.url), 'utf8')
     expect(code).not.toMatch(/'% Invalid input/)
+  })
+})
+
+describe('interface state changes log like IOS', () => {
+  const iface = () => {
+    const sim = getScenario('ipv4-addressing').build()
+    const cli = sim.consoles.R1
+    for (const c of ['enable', 'conf t', 'interface gi0/0',
+      'ip address 192.168.50.1 255.255.255.192']) cli.execute(c)
+    return cli
+  }
+
+  it('reports link and line protocol coming up', () => {
+    const out = iface().execute('no shutdown')
+    expect(out[0]).toMatch(/%LINK-3-UPDOWN: Interface GigabitEthernet0\/0, changed state to up$/)
+    expect(out[1]).toMatch(/%LINEPROTO-5-UPDOWN: Line protocol on Interface GigabitEthernet0\/0, changed state to up$/)
+  })
+
+  it('uses LINK-5-CHANGED for an administrative shutdown', () => {
+    const cli = iface()
+    cli.execute('no shutdown')
+    const out = cli.execute('shutdown')
+    expect(out[0]).toMatch(/%LINK-5-CHANGED:.*administratively down$/)
+    expect(out[1]).toMatch(/%LINEPROTO-5-UPDOWN:.*changed state to down$/)
+  })
+
+  it('says nothing when the state does not actually change', () => {
+    const cli = iface()
+    cli.execute('no shutdown')
+    expect(cli.execute('no shutdown')).toEqual([])
+  })
+
+  it('timestamps are deterministic and increase', () => {
+    const cli = iface()
+    const [first] = cli.execute('no shutdown')
+    expect(first).toMatch(/^\*Mar {2}1 00:00:01\.000: /)
+    const [next] = cli.execute('shutdown')
+    expect(next).toMatch(/^\*Mar {2}1 00:00:03\.000: /)
   })
 })
 
@@ -188,7 +226,7 @@ describe('"no" resolves abbreviations', () => {
   it.each(['no shutdown', 'no shut', 'no sh'])('%s brings the interface up', (cmd) => {
     const { cli, ifc } = router()
     expect(ifc().shutdown).toBe(true)
-    expect(cli.execute(cmd)).toEqual([])
+    expect(cli.execute(cmd).join('\n')).toMatch(/%LINK-3-UPDOWN.*changed state to up/)
     expect(ifc().shutdown).toBe(false)
   })
 

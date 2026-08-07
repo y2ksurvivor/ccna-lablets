@@ -264,6 +264,44 @@ export function ping(net, srcHostId, destIp) {
   return { ok: true, reason: 'reply' }
 }
 
+// Ping sourced from a router or switch console, rather than from a host.
+// IOS sources the echo from the interface the route exits through, so the
+// return path has to reach *that* address — which is why the source address is
+// resolved here rather than just testing forward reachability.
+export function pingFromDevice(net, devId, destIp) {
+  const dev = net.devices[devId]
+  if (!dev) return { ok: false, reason: 'no such device' }
+  if (dev.kind === 'host') return ping(net, devId, destIp)
+
+  const route = routeLookup(net, dev, destIp)
+  if (!route) return { ok: false, reason: 'no route to destination' }
+
+  // Source address = the address on the exit interface.
+  let exitPort = route.connected ? route.iface : resolveNextHop(net, devId, route.nextHop)?.exitPort
+  const exitIfc = exitPort ? getInterface(dev, exitPort) : null
+  const srcIp = exitIfc?.ip
+  if (!srcIp) {
+    // A layer-2 switch with no IP interface cannot source an echo at all.
+    return { ok: false, reason: 'no source address for destination' }
+  }
+
+  // The device may be pinging one of its own addresses.
+  for (const ifc of Object.values(dev.interfaces)) {
+    if (ifc.ip === destIp && !ifc.shutdown) return { ok: true, reason: 'local' }
+  }
+
+  const dstOwner = ownerOfIp(net, destIp)
+  if (!dstOwner) return { ok: false, reason: 'destination unknown' }
+  if (!forwardFrom(net, devId, destIp, srcIp)) return { ok: false, reason: 'no route to destination' }
+
+  const back = dstOwner.host
+    ? hostForward(net, dstOwner.devId, srcIp)
+    : forwardFrom(net, dstOwner.devId, srcIp)
+  if (!back) return { ok: false, reason: 'no return route' }
+
+  return { ok: true, reason: 'reply' }
+}
+
 // --- OSPF (single area SPF) --------------------------------------------------
 
 // Interfaces this router runs OSPF on (matched by a network statement + area).
