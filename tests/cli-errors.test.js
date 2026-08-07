@@ -87,6 +87,39 @@ describe('parse errors always use the IOS caret form', () => {
   })
 })
 
+describe('show ip interface brief matches IOS layout', () => {
+  const cli = () => {
+    const sim = getScenario('ipv4-addressing').build()
+    const c = sim.consoles.R1
+    for (const cmd of ['enable', 'conf t', 'interface gi0/0',
+      'ip address 192.168.50.1 255.255.255.192', 'no shutdown', 'end']) c.execute(cmd)
+    return c
+  }
+
+  it('prints full interface names, not abbreviations', () => {
+    const out = cli().execute('show ip interface brief')
+    expect(out[1]).toMatch(/^GigabitEthernet0\/0 /)
+    expect(out.join('\n')).not.toMatch(/^Gi0\//m)
+  })
+
+  it('uses fixed column widths so every row aligns', () => {
+    const out = cli().execute('show ip interface brief')
+    const header = out[0]
+    // Each column starts at the same offset on every row.
+    for (const col of ['IP-Address', 'OK?', 'Method', 'Status', 'Protocol']) {
+      const at = header.indexOf(col)
+      for (const row of out.slice(1)) {
+        expect(row.charAt(at)).not.toBe(' ')
+      }
+    }
+  })
+
+  it('reports admin-down and unassigned interfaces', () => {
+    const out = cli().execute('show ip interface brief').join('\n')
+    expect(out).toMatch(/GigabitEthernet0\/1 +unassigned +YES unset +administratively down down/)
+  })
+})
+
 describe('interface state changes log like IOS', () => {
   const iface = () => {
     const sim = getScenario('ipv4-addressing').build()

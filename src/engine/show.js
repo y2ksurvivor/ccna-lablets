@@ -135,21 +135,28 @@ function renderAclEntry(e) {
   return `${e.action} ${aclAddr(e.src)}`
 }
 
+// IOS pads this table to fixed widths and prints the full interface name, not
+// the abbreviation — so the columns line up whatever the interface is called.
+const BRIEF_COLS = [27, 16, 4, 7, 22]
+const briefRow = (cells) =>
+  cells.map((c, i) => (i < BRIEF_COLS.length ? String(c).padEnd(BRIEF_COLS[i]) : String(c)))
+    .join('').trimEnd()
+
 export function renderIpIntBrief(dev) {
-  const rows = [['Interface', 'IP-Address', 'OK?', 'Method', 'Status', 'Protocol']]
+  const out = [briefRow(['Interface', 'IP-Address', 'OK?', 'Method', 'Status', 'Protocol'])]
   for (const ifc of Object.values(dev.interfaces)) {
     const status = ifc.shutdown ? 'administratively down' : (ifc.lineProtocol ? 'up' : 'down')
     const proto = ifc.lineProtocol && !ifc.shutdown ? 'up' : 'down'
-    rows.push([
-      ifc.shortName,
+    out.push(briefRow([
+      ifc.name,
       ifc.ip || 'unassigned',
       'YES',
       ifc.ip ? 'manual' : 'unset',
       status,
       proto,
-    ])
+    ]))
   }
-  return formatColumns(rows)
+  return out
 }
 
 // show interfaces [name] — the long form. Same status wording as the brief
@@ -418,14 +425,3 @@ function memberProtocol(dev, po) {
   return '-'
 }
 
-function formatColumns(rows) {
-  const widths = []
-  for (const row of rows) {
-    row.forEach((cell, i) => {
-      widths[i] = Math.max(widths[i] || 0, String(cell).length)
-    })
-  }
-  return rows.map(row =>
-    row.map((cell, i) => String(cell).padEnd(widths[i] + 2)).join('').trimEnd()
-  )
-}
