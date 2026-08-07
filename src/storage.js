@@ -24,6 +24,14 @@ export function getCompletions(scenarioId) {
   return Number.isFinite(n) ? n : 0
 }
 
+// All counts at once, for showing every lablet's tally in the picker.
+export function getAllCompletions() {
+  const all = readAll()
+  const out = {}
+  for (const [id, n] of Object.entries(all)) if (Number.isFinite(n)) out[id] = n
+  return out
+}
+
 export function bumpCompletions(scenarioId) {
   const all = readAll()
   all[scenarioId] = (Number.isFinite(all[scenarioId]) ? all[scenarioId] : 0) + 1

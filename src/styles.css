@@ -47,6 +47,13 @@ body {
 }
 .btn:hover { border-color: var(--accent); }
 
+/* Quiet running tally next to the lablet picker. */
+.done-total {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* Main two-column layout */
 .app-main {
   flex: 1;
@@ -78,7 +85,10 @@ body {
   border-radius: 8px;
   padding: 8px;
 }
-.topo-svg { width: 100%; height: 190px; display: block; }
+/* The drawing is letterboxed to fit (preserveAspectRatio), and the left column
+   is far wider than the 620x210 viewBox is tall — so height is what limits the
+   scale, and raising it is what makes the diagram bigger. Width stays 100%. */
+.topo-svg { width: 100%; height: 240px; display: block; }
 .topo-edge { stroke: #3d444d; stroke-width: 2; }
 .topo-node { cursor: pointer; }
 .topo-box { stroke: var(--border); stroke-width: 1.5; transition: all .12s; }
@@ -89,6 +99,15 @@ body {
 .topo-node.active .topo-box { stroke: var(--accent); stroke-width: 2.5; filter: drop-shadow(0 0 4px rgba(47,129,247,.6)); }
 .topo-icon { fill: #cdd9e5; font-size: 18px; text-anchor: middle; dominant-baseline: middle; }
 .topo-label { fill: var(--muted); font-size: 10px; text-anchor: middle; font-family: monospace; }
+/* Interface names sitting alongside each link. */
+.topo-port {
+  fill: #7d8590;
+  font-size: 8.5px;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  font-family: monospace;
+  pointer-events: none;
+}
 .topo-node.active .topo-label { fill: var(--text); }
 
 /* Device tabs */

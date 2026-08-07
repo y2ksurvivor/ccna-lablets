@@ -4,7 +4,7 @@ import TopologyView from './components/TopologyView.jsx'
 import TaskPanel from './components/TaskPanel.jsx'
 import { getScenario, scenarios } from './scenarios/index.js'
 import { grade, scorePct } from './engine/grader.js'
-import { getCompletions, bumpCompletions, resetCompletions, getHintsEnabled, setHintsEnabled } from './storage.js'
+import { getCompletions, getAllCompletions, bumpCompletions, resetCompletions, getHintsEnabled, setHintsEnabled } from './storage.js'
 
 function initBuffers(sim) {
   const b = {}
@@ -30,6 +30,8 @@ export default function App() {
   const [histories, setHistories] = useState(() => initHistories(sim))
   const [results, setResults] = useState(() => grade(scenario, sim.net))
   const [completions, setCompletions] = useState(() => getCompletions(scenarioId))
+  // Every lablet's count, so the picker can show how many times each is done.
+  const [allCompletions, setAllCompletions] = useState(() => getAllCompletions())
   const [hintsEnabled, setHints] = useState(() => getHintsEnabled())
 
   function toggleHints() {
@@ -59,6 +61,7 @@ export default function App() {
     if (scorePct(newResults) === 100 && !countedRef.current) {
       countedRef.current = true
       setCompletions(bumpCompletions(scenario.id))
+      setAllCompletions(getAllCompletions())
     }
   }, [sim, scenario, scenarioId])
 
@@ -74,6 +77,7 @@ export default function App() {
 
   function resetCount() {
     setCompletions(resetCompletions(scenario.id))
+    setAllCompletions(getAllCompletions())
   }
 
   // Rebuild the whole session when the selected scenario changes (skip mount).
@@ -91,6 +95,8 @@ export default function App() {
   }, [scenarioId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const cli = sim.consoles[active]
+  // How many distinct lablets have been finished at least once.
+  const doneCount = scenarios.filter(s => (allCompletions[s.id] || 0) > 0).length
 
   return (
     <div className="app">
@@ -98,8 +104,13 @@ export default function App() {
         <h1>CCNA Lablets</h1>
         <select className="scenario-select" value={scenarioId}
           onChange={e => setScenarioId(e.target.value)}>
-          {scenarios.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+          {scenarios.map(s => {
+            const n = allCompletions[s.id] || 0
+            // Native <option> can't be styled, so the count rides in the text.
+            return <option key={s.id} value={s.id}>{n ? `${s.title} — ${n}×` : s.title}</option>
+          })}
         </select>
+        <span className="done-total">{doneCount}/{scenarios.length} done</span>
         <span className="app-spacer" />
         <button className={`btn mode-toggle ${hintsEnabled ? 'study' : 'exam'}`} onClick={toggleHints}
           title="Study mode shows hints; Exam mode hides them">
@@ -110,7 +121,7 @@ export default function App() {
 
       <main className="app-main">
         <div className="left-col">
-          <TopologyView layout={sim.layout} devices={sim.net.devices}
+          <TopologyView layout={sim.layout} devices={sim.net.devices} links={sim.net.links}
             active={active} onSelect={setActive} />
 
           <div className="device-tabs">
