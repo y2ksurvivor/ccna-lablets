@@ -5,7 +5,7 @@
 import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
-import { ifaceHasIpv6, ipv6PingWorks, ipv6RoutingOn, isSaved } from '../engine/grader.js'
+import { ifaceHasIpv6, ipv6PingWorks, ipv6RoutingOn, isSaved, observedPing, observedShow } from '../engine/grader.js'
 
 export const ipv6Addressing = {
   id: 'ipv6-addressing',
@@ -62,11 +62,21 @@ export const ipv6Addressing = {
       check: (net) => ifaceHasIpv6(net, 'R2', 'gi0/0', '2001:DB8:ACAD:1::2'),
     },
     {
+      id: 'intf-check',
+      text: 'Verify: run show ipv6 interface brief on R1 — the /64 is on Gi0/0',
+      hints: ['Confirm the prefix landed on the interface (and note the link-local alongside it).',
+        'R1# show ipv6 interface brief'],
+      check: (net) =>
+        ifaceHasIpv6(net, 'R1', 'gi0/0', '2001:DB8:ACAD:1::1') &&
+        observedShow(net, 'R1', 'ipv6 interface brief'),
+    },
+    {
       id: 'ping',
       text: 'Verify: R1 can ping R2 over IPv6 (2001:DB8:ACAD:1::2)',
       hints: ['Both ends on the same /64 and up — ping the neighbor\'s address.',
         'R1# ping 2001:DB8:ACAD:1::2'],
-      check: (net) => ipv6PingWorks(net, 'R1', '2001:DB8:ACAD:1::2'),
+      check: (net) => ipv6PingWorks(net, 'R1', '2001:DB8:ACAD:1::2') &&
+        observedPing(net, 'R1', '2001:DB8:ACAD:1::2'),
     },
     {
       id: 'save',

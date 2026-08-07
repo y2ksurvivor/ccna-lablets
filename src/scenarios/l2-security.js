@@ -6,7 +6,8 @@ import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { portSecured, dhcpSnoopingOn, arpInspectionOn, ifaceTrusted, isSaved } from '../engine/grader.js'
+import { portSecured, dhcpSnoopingOn, arpInspectionOn, ifaceTrusted, isSaved,
+  observedShow } from '../engine/grader.js'
 
 export const l2Security = {
   id: 'l2-security',
@@ -81,6 +82,16 @@ export const l2Security = {
       hints: ['DAI leans on the DHCP snooping binding table to validate ARP on the VLAN.',
         'ip arp inspection vlan 10'],
       check: (net) => arpInspectionOn(net, 'SW1', 10),
+    },
+    {
+      id: 'portsec-check',
+      text: 'Verify: run show port-security on SW1 — both access ports are secured',
+      hints: ['Confirm the port-security state, max count, and violation action per port.',
+        'SW1# show port-security'],
+      check: (net) =>
+        portSecured(net, 'SW1', 'gi0/1', { maximum: 1, sticky: true, violation: 'shutdown' }) &&
+        portSecured(net, 'SW1', 'gi0/2', { maximum: 1, sticky: true, violation: 'shutdown' }) &&
+        observedShow(net, 'SW1', 'port-security'),
     },
     {
       id: 'save',

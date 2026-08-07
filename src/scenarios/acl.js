@@ -12,7 +12,14 @@ import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { pingWorks, aclAllows, aclBlocks, isSaved } from '../engine/grader.js'
+import { pingWorks, aclAllows, aclBlocks, isSaved, observedPing, observedShow } from '../engine/grader.js'
+
+const SERVER_IP = '192.168.2.100'
+// ACL 10 is actually filtering on the server-facing interface. Both reachability
+// steps require this: on an untouched lab PC1 can already reach the server, so
+// "PC1 CAN reach" would otherwise be green before any work was done.
+const aclApplied = (net) =>
+  getInterface(net.devices.R1, 'GigabitEthernet0/1').accessGroupOut === '10'
 
 function ip(dev, name, addr, mask) {
   const i = getInterface(dev, name)
@@ -22,7 +29,7 @@ function ip(dev, name, addr, mask) {
 export const aclLab = {
   id: 'acl',
   title: 'Access Control Lists (standard)',
-  blueprint: ['5.6 Access control lists'],
+  blueprint: ['5.6 Access control lists (standard and extended)'],
   intro: [
     'PC1 and PC2 share a LAN; a server sits on another. Permit PC1 to the',
     'server but deny PC2 — using a numbered standard ACL.',
@@ -81,19 +88,49 @@ export const aclLab = {
       text: 'Apply ACL 10 outbound on R1 g0/1 (the server-facing interface)',
       hints: ['Standard ACLs go closest to the destination — outbound on the interface toward the server.',
         'interface gi0/1 → ip access-group 10 out'],
-      check: (net) => getInterface(net.devices.R1, 'GigabitEthernet0/1').accessGroupOut === '10',
+      check: (net) => aclApplied(net),
     },
     {
       id: 'pc1-ok',
-      text: 'Verify: PC1 CAN reach the server',
-      hints: ['PC1 is permitted, so this should succeed.', 'PC1> ping 192.168.2.100'],
-      check: (net) => pingWorks(net, 'PC1', '192.168.2.100'),
+      text: `Verify: ping the server from PC1 — it still gets through`,
+      hints: ['PC1 is permitted, so this should succeed — prove the ACL did not over-block.',
+        `PC1> ping ${SERVER_IP}`],
+      check: (net) => aclApplied(net) && pingWorks(net, 'PC1', SERVER_IP) &&
+        observedPing(net, 'PC1', SERVER_IP),
     },
     {
       id: 'pc2-blocked',
-      text: 'Verify: PC2 CANNOT reach the server',
-      hints: ['PC2 is denied by the ACL, so this must fail (Request timed out).', 'PC2> ping 192.168.2.100'],
-      check: (net) => !pingWorks(net, 'PC2', '192.168.2.100'),
+      text: `Verify: ping the server from PC2 — it times out`,
+      hints: ['PC2 is denied by the ACL, so this must fail (Request timed out).',
+        `PC2> ping ${SERVER_IP}`],
+      check: (net) => aclApplied(net) && !pingWorks(net, 'PC2', SERVER_IP) &&
+        observedPing(net, 'PC2', SERVER_IP),
+    },
+    {
+      id: 'acl-ext-def',
+      text: 'Build extended ACL 100: permit PC1 to the server, deny PC2 to the server',
+      hints: ['Extended ACLs match source AND destination, so the policy can name the server explicitly instead of every source.',
+        `access-list 100 permit ip host 192.168.1.10 host ${SERVER_IP}\naccess-list 100 deny ip host 192.168.1.20 host ${SERVER_IP}`],
+      check: (net) =>
+        aclAllows(net, 'R1', '100', '192.168.1.10', SERVER_IP) &&
+        aclBlocks(net, 'R1', '100', '192.168.1.20', SERVER_IP),
+    },
+    {
+      id: 'acl-ext-apply',
+      text: 'Apply ACL 100 inbound on R1 g0/0 (extended ACLs go closest to the source)',
+      hints: ['Unlike a standard ACL, an extended one can sit near the source without over-blocking, because it matches the destination too.',
+        'interface gi0/0 → ip access-group 100 in'],
+      check: (net) => getInterface(net.devices.R1, 'GigabitEthernet0/0').accessGroupIn === '100',
+    },
+    {
+      id: 'acl-verify',
+      text: 'Verify: run show access-lists on R1 — both the standard and extended list are present',
+      hints: ['Read the lists back to check the order of entries — order decides the outcome.',
+        'R1# show access-lists'],
+      check: (net) =>
+        (net.devices.R1.acls['10'] || []).length > 0 &&
+        (net.devices.R1.acls['100'] || []).length > 0 &&
+        observedShow(net, 'R1', 'access-lists'),
     },
     {
       id: 'save',

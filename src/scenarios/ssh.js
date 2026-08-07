@@ -6,7 +6,7 @@ import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { sshReady, isSaved } from '../engine/grader.js'
+import { sshReady, isSaved, observedShow } from '../engine/grader.js'
 
 export const sshLab = {
   id: 'ssh',
@@ -69,9 +69,12 @@ export const sshLab = {
     },
     {
       id: 'verify',
-      text: 'Verify: SSH is fully enabled on R1',
-      hints: ['All pieces together — domain, user, keys, and SSH-only VTY with local login.', 'R1# show ip ssh'],
-      check: (net) => sshReady(net, 'R1'),
+      text: 'Verify: run show ip ssh on R1 — SSHv2 is enabled',
+      hints: ['All pieces together — domain, user, keys, and SSH-only VTY with local login. Confirm it from the SSH server\'s own status, not from show run.',
+        'R1# show ip ssh'],
+      // Gated on the show command: sshReady() is just the AND of the four tasks
+      // above, so without this the step would pass the moment the VTY task did.
+      check: (net) => sshReady(net, 'R1') && observedShow(net, 'R1', 'ip ssh'),
     },
     {
       id: 'save',

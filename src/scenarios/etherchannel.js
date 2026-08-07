@@ -8,7 +8,7 @@
 import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
-import { portInChannel, channelUp } from '../engine/grader.js'
+import { portInChannel, channelUp, observedShow } from '../engine/grader.js'
 
 export const etherchannel = {
   id: 'etherchannel',
@@ -66,10 +66,16 @@ export const etherchannel = {
     },
     {
       id: 'channel-up',
-      text: 'Verify: Port-channel 1 negotiates and comes up on both ends',
-      hints: ['LACP only bundles if the two sides\' modes are compatible. Two passive ends never start negotiation — at least one must be active.',
-        'show etherchannel summary → look for Po1(U) and (P) on the ports'],
-      check: (net) => channelUp(net, 'SW1', 1) && channelUp(net, 'SW2', 1),
+      text: 'Verify: run show etherchannel summary on SW1 and SW2 — Po1 is (U) with both ports (P)',
+      hints: ['LACP only bundles if the two sides\' modes are compatible. Two passive ends never start negotiation — at least one must be active. Then check the summary on each switch — each one only reports its own view.',
+        'On SW1: show etherchannel summary → look for Po1(U) and (P) on the ports. Then the same on SW2.'],
+      // Gated on the show command as well as the state: a verification step you
+      // never ran isn't verification. Each switch only reports its own side, so
+      // "both ends" means running it on both.
+      check: (net) =>
+        channelUp(net, 'SW1', 1) && channelUp(net, 'SW2', 1) &&
+        observedShow(net, 'SW1', 'etherchannel summary') &&
+        observedShow(net, 'SW2', 'etherchannel summary'),
     },
   ],
 }

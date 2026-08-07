@@ -10,7 +10,7 @@ import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { ifaceHasIp, pingWorks, isSaved } from '../engine/grader.js'
+import { ifaceHasIp, pingWorks, isSaved, observedPing, observedShow } from '../engine/grader.js'
 
 export const ipv4Addressing = {
   id: 'ipv4-addressing',
@@ -67,11 +67,22 @@ export const ipv4Addressing = {
       check: (net) => ifaceHasIp(net, 'R1', 'gi0/1', '192.168.50.65', '255.255.255.192'),
     },
     {
+      id: 'intf-check',
+      text: 'Verify: run show ip interface brief on R1 — both LAN interfaces are up',
+      hints: ['Read the addresses back off the router before trusting them.',
+        'R1# show ip interface brief'],
+      check: (net) =>
+        ifaceHasIp(net, 'R1', 'gi0/0', '192.168.50.1', '255.255.255.192') &&
+        ifaceHasIp(net, 'R1', 'gi0/1', '192.168.50.65', '255.255.255.192') &&
+        observedShow(net, 'R1', 'ip interface brief'),
+    },
+    {
       id: 'ping',
       text: 'Verify: PC1 can ping PC2 across the two subnets',
       hints: ['Correct addressing on both LANs means R1 routes between them automatically (connected routes).',
         'PC1> ping 192.168.50.74'],
-      check: (net) => pingWorks(net, 'PC1', '192.168.50.74'),
+      check: (net) => pingWorks(net, 'PC1', '192.168.50.74') &&
+        observedPing(net, 'PC1', '192.168.50.74'),
     },
     {
       id: 'save',

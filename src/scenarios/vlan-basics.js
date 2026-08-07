@@ -6,19 +6,21 @@
 //     PC3 ─┘                          └─ PC4      VLAN 20 (192.168.20.0/24)
 //
 // The learner must create VLANs 10/20 on both switches, place each PC's access
-// port in the right VLAN, and trunk the SW1–SW2 link so the VLANs span both.
+// port in the right VLAN, trunk the SW1–SW2 link so the VLANs span both, and
+// move the trunk's native VLAN off the default (blueprint 2.2.c).
 
 import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { ping } from '../engine/l3.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { vlanExists, portAccessVlan, portIsTrunk, isSaved } from '../engine/grader.js'
+import { vlanExists, portAccessVlan, portIsTrunk, isSaved, observedPing, observedShow,
+  trunkNativeVlan } from '../engine/grader.js'
 
 export const vlanBasics = {
   id: 'vlan-basics',
   title: 'VLANs & Trunking Across Two Switches',
-  blueprint: ['2.1 VLANs (access, default, inter-VLAN)', '2.2 Trunking (802.1Q)'],
+  blueprint: ['2.1 VLANs (access, default, inter-VLAN)', '2.2 Trunking (802.1Q, native VLAN)'],
   intro: [
     'Two switches, SW1 and SW2, are joined by link Gi0/24. Four PCs are',
     'attached. Segment the network into two VLANs and let each VLAN talk',
@@ -26,8 +28,10 @@ export const vlanBasics = {
     '',
     'VLAN 10 = SALES  (192.168.10.0/24):  PC1 on SW1 Gi0/1, PC2 on SW2 Gi0/1',
     'VLAN 20 = ENG    (192.168.20.0/24):  PC3 on SW1 Gi0/2, PC4 on SW2 Gi0/2',
+    'Native VLAN on the trunk = 99, created on both switches (ends must match).',
     '',
-    'Then verify: PC1 can ping PC2, PC3 can ping PC4.',
+    'Then verify: show interfaces trunk on each switch, and PC1 can ping PC2,',
+    'PC3 can ping PC4.',
   ],
 
   build() {
@@ -113,6 +117,28 @@ export const vlanBasics = {
       check: (net) => portIsTrunk(net, 'SW1', 'gi0/24') && portIsTrunk(net, 'SW2', 'gi0/24'),
     },
     {
+      id: 'native-vlan',
+      text: 'Create VLAN 99 and make it the native VLAN on the Gi0/24 trunk — on BOTH ends',
+      hints: ['Untagged frames on a trunk ride the native VLAN, which defaults to 1. Moving it to a dedicated, otherwise-unused VLAN is standard practice — but both ends must agree, or the switches report a native VLAN mismatch. Create the VLAN itself as well, so it exists in the database rather than being referenced out of thin air.',
+        'vlan 99\ninterface gi0/24 → switchport trunk native vlan 99   (both commands on each switch)'],
+      check: (net) =>
+        vlanExists(net, 'SW1', 99) && vlanExists(net, 'SW2', 99) &&
+        trunkNativeVlan(net, 'SW1', 'gi0/24') === 99 &&
+        trunkNativeVlan(net, 'SW2', 'gi0/24') === 99,
+    },
+    {
+      id: 'trunk-check',
+      text: 'Verify: run show interfaces trunk on SW1 and SW2 — Gi0/24 is trunking VLANs 10 and 20 with native VLAN 99',
+      hints: ['The trunk table is the direct evidence: mode, encapsulation, native VLAN, and which VLANs are allowed and active. Check the native VLAN column matches on both switches.',
+        'SW1# show interfaces trunk   then the same on SW2'],
+      check: (net) =>
+        portIsTrunk(net, 'SW1', 'gi0/24') && portIsTrunk(net, 'SW2', 'gi0/24') &&
+        trunkNativeVlan(net, 'SW1', 'gi0/24') === 99 &&
+        trunkNativeVlan(net, 'SW2', 'gi0/24') === 99 &&
+        observedShow(net, 'SW1', 'interfaces trunk') &&
+        observedShow(net, 'SW2', 'interfaces trunk'),
+    },
+    {
       id: 'ping10',
       text: 'Verify: PC1 reaches PC2 across VLAN 10 (ping 192.168.10.20 from PC1)',
       hints: ['Open PC1\'s console and ping PC2. It only works once both ports are in VLAN 10 AND the trunk is up.',
@@ -121,7 +147,8 @@ export const vlanBasics = {
       check: (net) =>
         portAccessVlan(net, 'SW1', 'gi0/1') === 10 &&
         portAccessVlan(net, 'SW2', 'gi0/1') === 10 &&
-        ping(net, 'PC1', '192.168.10.20').ok,
+        ping(net, 'PC1', '192.168.10.20').ok &&
+        observedPing(net, 'PC1', '192.168.10.20'),
     },
     {
       id: 'ping20',
@@ -130,7 +157,8 @@ export const vlanBasics = {
       check: (net) =>
         portAccessVlan(net, 'SW1', 'gi0/2') === 20 &&
         portAccessVlan(net, 'SW2', 'gi0/2') === 20 &&
-        ping(net, 'PC3', '192.168.20.40').ok,
+        ping(net, 'PC3', '192.168.20.40').ok &&
+        observedPing(net, 'PC3', '192.168.20.40'),
     },
     {
       id: 'save',

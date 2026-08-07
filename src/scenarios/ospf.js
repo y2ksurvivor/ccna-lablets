@@ -9,7 +9,8 @@ import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { pingWorks, routeCovers, ospfAdjacent, isSaved } from '../engine/grader.js'
+import { pingWorks, routeCovers, ospfAdjacent, isSaved, observedPing, observedShow,
+  ospfRouterIdIs } from '../engine/grader.js'
 
 function ip(dev, name, addr, mask) {
   const i = getInterface(dev, name)
@@ -73,6 +74,13 @@ export const ospfLab = {
 
   tasks: [
     {
+      id: 'router-id',
+      text: 'On R1, start OSPF process 1 and pin its router-id to 1.1.1.1',
+      hints: ['Without an explicit router-id OSPF picks one from the interfaces — pin it so the ID is predictable.',
+        'R1(config)# router ospf 1 → router-id 1.1.1.1'],
+      check: (net) => ospfRouterIdIs(net, 'R1', '1.1.1.1'),
+    },
+    {
       id: 'adj-12',
       text: 'Form an OSPF adjacency between R1 and R2',
       hints: ['Run OSPF on both routers and advertise the 10.1.12.0/30 link in area 0 so they become neighbors.',
@@ -101,11 +109,21 @@ export const ospfLab = {
       check: (net) => routeCovers(net, 'R3', '192.168.1.10', 'O'),
     },
     {
+      id: 'nbr-check',
+      text: 'Verify: run show ip ospf neighbor on R2 — both R1 and R3 are listed',
+      hints: ['R2 sits in the middle, so its neighbour table should show an adjacency on each side.',
+        'R2# show ip ospf neighbor'],
+      check: (net) =>
+        ospfAdjacent(net, 'R2', 'R1') && ospfAdjacent(net, 'R2', 'R3') &&
+        observedShow(net, 'R2', 'ip ospf neighbor'),
+    },
+    {
       id: 'ping',
       text: 'Verify: PC1 can ping PC3 (192.168.3.10)',
       hints: ['With OSPF converged and both LANs advertised, end-to-end should work.',
         'PC1> ping 192.168.3.10'],
-      check: (net) => pingWorks(net, 'PC1', '192.168.3.10'),
+      check: (net) => pingWorks(net, 'PC1', '192.168.3.10') &&
+        observedPing(net, 'PC1', '192.168.3.10'),
     },
     {
       id: 'save',

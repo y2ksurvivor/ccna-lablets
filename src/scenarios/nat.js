@@ -9,7 +9,7 @@ import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { ifaceNatRole, natReachable, isSaved } from '../engine/grader.js'
+import { ifaceNatRole, natReachable, isSaved, observedShow } from '../engine/grader.js'
 
 function ip(dev, name, addr, mask) {
   const i = getInterface(dev, name)
@@ -76,10 +76,13 @@ export const natLab = {
     },
     {
       id: 'verify',
-      text: 'Verify: the static translation is active and usable',
-      hints: ['With inside/outside set and the static map in place, the translation exists.',
-        'R1# show ip nat translations'],
-      check: (net) => natReachable(net, 'R1', 'ISP', '192.168.1.10'),
+      text: 'Verify: run show ip nat translations on R1 — the static entry is active',
+      hints: ['With inside/outside set and the static map in place, the translation exists — but confirm it in the translation table.',
+        'R1# show ip nat translations   (or show ip nat statistics)'],
+      // Gated on the show command — the state check alone is the AND of the
+      // three config tasks above.
+      check: (net) => natReachable(net, 'R1', 'ISP', '192.168.1.10') &&
+        observedShow(net, 'R1', ['ip nat translations', 'ip nat statistics']),
     },
     {
       id: 'save',

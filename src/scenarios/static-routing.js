@@ -14,7 +14,8 @@ import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { pingWorks, routeCovers, isSaved } from '../engine/grader.js'
+import { pingWorks, routeCovers, isSaved, observedPing, observedShow,
+  hasStaticRoute, routeVia } from '../engine/grader.js'
 
 function ip(dev, name, addr, mask) {
   const i = getInterface(dev, name)
@@ -25,7 +26,7 @@ function ip(dev, name, addr, mask) {
 export const staticRouting = {
   id: 'static-routing',
   title: 'Static Routing (with default routes)',
-  blueprint: ['3.3 IPv4 static routing (default & network routes)'],
+  blueprint: ['3.3 IPv4 static routing (default, network, host, and floating static)'],
   intro: [
     'Three routers in a line, each LAN with a PC. All interface IPs are already',
     'configured — your job is the routing so PC1 can reach PC3.',
@@ -107,11 +108,40 @@ export const staticRouting = {
       check: (net) => routeCovers(net, 'R3', '192.168.1.10', 'S'),
     },
     {
+      id: 'host-route',
+      text: 'On R2, add a host route for PC3 (192.168.3.10/32) via R3 (10.1.23.2)',
+      hints: ['A host route is just a static route with a /32 mask — the longest match possible, so it wins over the /24.',
+        'R2(config)# ip route 192.168.3.10 255.255.255.255 10.1.23.2'],
+      check: (net) => hasStaticRoute(net, 'R2', '192.168.3.10', '255.255.255.255',
+        { nextHop: '10.1.23.2' }),
+    },
+    {
+      id: 'floating-static',
+      text: 'On R3, add a floating static default route via 10.1.23.9 with AD 200 (a standby path)',
+      hints: ['A floating static is a backup: give it a worse administrative distance than the primary so it only installs if the primary disappears.',
+        'R3(config)# ip route 0.0.0.0 0.0.0.0 10.1.23.9 200'],
+      check: (net) => hasStaticRoute(net, 'R3', '0.0.0.0', '0.0.0.0', { ad: 200 }),
+    },
+    {
+      id: 'route-check',
+      text: 'Verify: run show ip route on R2 and R3 — the /32 is installed, and the AD 200 backup is not',
+      hints: ['Only the best route per prefix gets installed, so the floating static should be absent from R3\'s table while the primary is up. The /32 on R2 should be there, below the /24.',
+        'R2# show ip route   then R3# show ip route'],
+      check: (net) => {
+        const toPc3 = routeVia(net, 'R2', '192.168.3.10')
+        const r3Default = routeVia(net, 'R3', '192.168.1.10')
+        return !!toPc3 && toPc3.nextHop === '10.1.23.2' &&
+          !!r3Default && r3Default.ad === 1 &&
+          observedShow(net, 'R2', 'ip route') && observedShow(net, 'R3', 'ip route')
+      },
+    },
+    {
       id: 'ping',
       text: 'Verify: PC1 can ping PC3 (192.168.3.10)',
       hints: ['Open PC1 and ping PC3. Needs a full path there AND back.',
         'PC1> ping 192.168.3.10'],
-      check: (net) => pingWorks(net, 'PC1', '192.168.3.10'),
+      check: (net) => pingWorks(net, 'PC1', '192.168.3.10') &&
+        observedPing(net, 'PC1', '192.168.3.10'),
     },
     {
       id: 'save',

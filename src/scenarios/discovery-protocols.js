@@ -9,7 +9,7 @@
 import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
-import { discoverySeesNeighbor, globalDiscoveryOn } from '../engine/grader.js'
+import { discoverySeesNeighbor, globalDiscoveryOn, observedShow } from '../engine/grader.js'
 
 export const discoveryProtocols = {
   id: 'discovery-protocols',
@@ -68,6 +68,15 @@ export const discoveryProtocols = {
       check: (net) => discoverySeesNeighbor(net, 'SW1', 'cdp', 'R1'),
     },
     {
+      id: 'cdp-verify',
+      text: 'Verify: run show cdp neighbors on SW1 — R1 appears',
+      hints: ['Read the neighbour table rather than assuming the interface command took effect.',
+        'SW1# show cdp neighbors'],
+      check: (net) =>
+        discoverySeesNeighbor(net, 'SW1', 'cdp', 'R1') &&
+        observedShow(net, 'SW1', 'cdp neighbors'),
+    },
+    {
       id: 'lldp-on',
       text: 'Enable LLDP globally on SW1 and SW2',
       hints: ['LLDP is off by default (unlike CDP). Turn it on globally on each switch.',
@@ -76,11 +85,16 @@ export const discoveryProtocols = {
     },
     {
       id: 'lldp-verify',
-      text: 'Verify: SW1 and SW2 see each other as LLDP neighbors',
-      hints: ['Check the LLDP neighbor table on each switch.', 'SW1# show lldp neighbors'],
+      text: 'Verify: run show lldp neighbors on SW1 and SW2 — each sees the other',
+      hints: ['Check the LLDP neighbor table on each switch — a switch only lists what it has heard itself, so check both.',
+        'SW1# show lldp neighbors   then the same on SW2'],
+      // Gated on the show command on each end: the state check alone repeats the
+      // 'lldp-on' task, since these two switches are directly linked.
       check: (net) =>
         discoverySeesNeighbor(net, 'SW1', 'lldp', 'SW2') &&
-        discoverySeesNeighbor(net, 'SW2', 'lldp', 'SW1'),
+        discoverySeesNeighbor(net, 'SW2', 'lldp', 'SW1') &&
+        observedShow(net, 'SW1', 'lldp neighbors') &&
+        observedShow(net, 'SW2', 'lldp neighbors'),
     },
   ],
 }

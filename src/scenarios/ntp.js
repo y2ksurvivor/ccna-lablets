@@ -5,7 +5,7 @@
 import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
-import { ntpIsSynced, isSaved } from '../engine/grader.js'
+import { ntpIsSynced, isSaved, observedShow } from '../engine/grader.js'
 
 function ip(dev, name, addr, mask) {
   const i = getInterface(dev, name)
@@ -72,15 +72,20 @@ export const ntpLab = {
     },
     {
       id: 'r2-sync',
-      text: 'Verify: R2 is synchronized to R1',
-      hints: ['R2 syncs only if R1 is a master and reachable.', 'R2# show ntp status'],
-      check: (net) => ntpIsSynced(net, 'R2'),
+      text: 'Verify: check the clock status on R2 — it is synchronized to R1',
+      hints: ['R2 syncs only if R1 is a master and reachable. Read it off R2 itself.',
+        'R2# show ntp status   (or show ntp associations)'],
+      // Gated on the show command — the state check alone just repeats the
+      // 'master' + 'r2-client' config tasks.
+      check: (net) => ntpIsSynced(net, 'R2') &&
+        observedShow(net, 'R2', ['ntp status', 'ntp associations']),
     },
     {
       id: 'r3-sync',
-      text: 'Verify: R3 is synchronized to R1',
-      hints: ['Same check on R3.', 'R3# show ntp status'],
-      check: (net) => ntpIsSynced(net, 'R3'),
+      text: 'Verify: check the clock status on R3 — it is synchronized to R1',
+      hints: ['Same check on R3.', 'R3# show ntp status   (or show ntp associations)'],
+      check: (net) => ntpIsSynced(net, 'R3') &&
+        observedShow(net, 'R3', ['ntp status', 'ntp associations']),
     },
     {
       id: 'save',

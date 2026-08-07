@@ -24,7 +24,7 @@ export function scorePct(results) {
 
 // --- reusable check helpers --------------------------------------------------
 
-import { getInterface, canonicalIface } from './device.js'
+import { getInterface, canonicalIface, hasObserved } from './device.js'
 import { renderRunningConfig } from './show.js'
 import { discoveryNeighbors, etherchannelUp } from './network.js'
 import { ping, routeLookup, ospfNeighbors } from './l3.js'
@@ -47,6 +47,31 @@ export function routeCovers(net, devId, destIp, proto = null) {
 
 export function ospfAdjacent(net, devId, neighborId) {
   return ospfNeighbors(net, devId).some(n => n.id === neighborId)
+}
+
+export function ospfRouterIdIs(net, devId, routerId) {
+  return net.devices[devId]?.ospf?.routerId === routerId
+}
+
+// A configured static route exists with this exact prefix/mask, optionally
+// pinned to a next hop and/or administrative distance. Reads the configured
+// routes rather than the routing table, so a floating static (higher AD, not
+// installed while the primary is up) is still visible to the check.
+export function hasStaticRoute(net, devId, prefix, mask, opts = {}) {
+  const routes = net.devices[devId]?.routes || []
+  return routes.some(r =>
+    r.proto === 'S' && r.prefix === prefix && r.mask === mask &&
+    (opts.nextHop == null || r.nextHop === opts.nextHop) &&
+    (opts.ad == null || r.ad === opts.ad))
+}
+
+// Which route the router would actually use for destIp — for asserting that a
+// floating static stays out of the way while the primary path is up.
+export function routeVia(net, devId, destIp) {
+  const dev = net.devices[devId]
+  if (!dev) return null
+  const r = routeLookup(net, dev, destIp)
+  return r ? { proto: r.proto, nextHop: r.nextHop || null, ad: r.ad } : null
 }
 
 // --- IP services checks ------------------------------------------------------
@@ -191,6 +216,27 @@ export function channelUp(net, devId, id) {
   return etherchannelUp(net, devId, id)
 }
 
+// The operator has run a given show command on this device. Use it to gate a
+// "Verify: ..." task so it can't pass on config alone — the learner has to look
+// at the output, like they would on the exam. Pass an array when more than one
+// command legitimately verifies the same thing (any one of them counts).
+//
+// Deliberately never keyed on `running-config`: learners run show run constantly
+// while configuring, so accepting it would let a verify task pass by accident —
+// the exact bug this gate exists to prevent.
+export function observedShow(net, devId, key) {
+  const dev = net.devices[devId]
+  const keys = Array.isArray(key) ? key : [key]
+  return keys.some(k => hasObserved(dev, k))
+}
+
+// This device has pinged this exact target at least once, successfully or not.
+// Pair it with pingWorks()/!pingWorks() so a reachability step needs the ping to
+// have actually been sent, not merely to be possible.
+export function observedPing(net, devId, target) {
+  return hasObserved(net.devices[devId], `ping ${String(target).toLowerCase()}`)
+}
+
 // True when the device has been saved AND nothing changed since (running config
 // matches the saved snapshot). Never-saved devices return false.
 export function isSaved(net, devId) {
@@ -210,6 +256,16 @@ export function portAccessVlan(net, devId, ifaceName) {
   const ifc = d.interfaces[canonicalIface(ifaceName)]
   if (!ifc || ifc.mode !== 'access') return null
   return ifc.accessVlan || 1
+}
+
+// Native VLAN on a trunk port. Untagged frames ride this VLAN, and IOS defaults
+// it to 1 — hence the fallback, which matches what show interfaces trunk prints.
+export function trunkNativeVlan(net, devId, ifaceName) {
+  const d = net.devices[devId]
+  if (!d) return null
+  const ifc = d.interfaces[canonicalIface(ifaceName)]
+  if (!ifc || ifc.mode !== 'trunk') return null
+  return ifc.trunkNativeVlan || 1
 }
 
 export function portIsTrunk(net, devId, ifaceName) {

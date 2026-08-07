@@ -9,7 +9,7 @@ import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { dhcpLeaseInSubnet, isSaved } from '../engine/grader.js'
+import { dhcpLeaseInSubnet, isSaved, observedShow } from '../engine/grader.js'
 
 function ip(dev, name, addr, mask) {
   const i = getInterface(dev, name)
@@ -83,10 +83,13 @@ export const dhcpLab = {
     },
     {
       id: 'lease',
-      text: 'Verify: PC1 receives a lease in 192.168.1.0/24',
-      hints: ['With pool + relay in place, PC1\'s request reaches R2 and gets an address.',
+      text: 'Verify: run ipconfig on PC1 — it holds a lease in 192.168.1.0/24',
+      hints: ['With pool + relay in place, PC1\'s request reaches R2 and gets an address. Confirm it from the client.',
         'PC1> ipconfig'],
-      check: (net) => dhcpLeaseInSubnet(net, 'PC1', '192.168.1.0', '255.255.255.0'),
+      // Gated on the client actually reading its address — the state check alone
+      // is the AND of the pool + relay config tasks.
+      check: (net) => dhcpLeaseInSubnet(net, 'PC1', '192.168.1.0', '255.255.255.0') &&
+        observedShow(net, 'PC1', 'ipconfig'),
     },
     {
       id: 'save',
