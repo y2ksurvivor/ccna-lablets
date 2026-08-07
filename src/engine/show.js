@@ -3,7 +3,7 @@
 // test and keeps the command handlers small.
 
 import { discoveryNeighbors, etherchannelUp } from './network.js'
-import { getInterface } from './device.js'
+import { getInterface, canonicalIface } from './device.js'
 import { routingTable, ospfNeighbors, maskToLen } from './l3.js'
 import { ntpSynced, natTranslations } from './ipservices.js'
 
@@ -152,6 +152,31 @@ export function renderIpIntBrief(dev) {
   return formatColumns(rows)
 }
 
+// show interfaces [name] — the long form. Same status wording as the brief
+// table, plus the per-interface detail the brief view leaves out.
+export function renderInterfaces(dev, filter = null) {
+  // The caller validates the name (so a bad one gets IOS's caret error); by here
+  // the filter either names a real interface or is absent.
+  const wanted = filter ? canonicalIface(filter) : null
+  const list = Object.values(dev.interfaces).filter(i => !wanted || i.name === wanted)
+  const out = []
+  for (const ifc of list) {
+    const status = ifc.shutdown ? 'administratively down' : (ifc.lineProtocol ? 'up' : 'down')
+    const proto = ifc.lineProtocol && !ifc.shutdown ? 'up' : 'down'
+    out.push(`${ifc.name} is ${status}, line protocol is ${proto}`)
+    out.push(`  Hardware is Gigabit Ethernet, address is ${ifc.mac}`)
+    if (ifc.description) out.push(`  Description: ${ifc.description}`)
+    out.push(ifc.ip
+      ? `  Internet address is ${ifc.ip}/${maskToLen(ifc.mask)}`
+      : '  Internet address is not set')
+    for (const a of (ifc.ipv6 || [])) out.push(`  IPv6 address is ${a}`)
+    out.push('  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec')
+    out.push('  Encapsulation ARPA, loopback not set')
+    out.push('  Full-duplex, 1000Mb/s, media type is RJ45')
+  }
+  return out
+}
+
 export function renderIpv6IntBrief(dev) {
   const out = []
   for (const ifc of Object.values(dev.interfaces)) {
@@ -175,6 +200,33 @@ export function renderVlanBrief(dev) {
       .join(', ')
     out.push(`${String(v.id).padEnd(4)} ${v.name.padEnd(32)} active    ${ports}`)
   }
+  return out
+}
+
+// show interfaces trunk — the canonical verification for interswitch
+// connectivity (blueprint 2.2): which ports are trunking, the native VLAN, and
+// which VLANs are actually allowed and forwarding.
+export function renderInterfacesTrunk(dev) {
+  if (dev.kind !== 'switch') return ['% This command is only available on switches']
+  const trunks = Object.values(dev.interfaces).filter(i => i.mode === 'trunk' && !i.shutdown)
+  if (!trunks.length) return ['']
+
+  const allowed = (i) => (i.trunkAllowed === 'all' ? '1-4094' : [...i.trunkAllowed].sort((a, b) => a - b).join(','))
+  // Active = allowed on this trunk AND defined in the local VLAN database.
+  const active = (i) => {
+    const ids = Object.keys(dev.vlans).map(Number).sort((a, b) => a - b)
+    const permitted = i.trunkAllowed === 'all' ? ids : ids.filter(v => i.trunkAllowed.includes(v))
+    return permitted.length ? permitted.join(',') : 'none'
+  }
+
+  const out = ['Port        Mode         Encapsulation  Status        Native vlan']
+  for (const i of trunks) {
+    out.push(`${i.shortName.padEnd(11)} on           802.1q         trunking      ${i.trunkNativeVlan || 1}`)
+  }
+  out.push('', 'Port        Vlans allowed on trunk')
+  for (const i of trunks) out.push(`${i.shortName.padEnd(11)} ${allowed(i)}`)
+  out.push('', 'Port        Vlans allowed and active in management domain')
+  for (const i of trunks) out.push(`${i.shortName.padEnd(11)} ${active(i)}`)
   return out
 }
 
@@ -250,6 +302,8 @@ export function renderEtherchannelSummary(dev, net) {
 
 export function renderIpRoute(dev, net) {
   if (dev.kind !== 'router') return ['% This command is available on routers']
+  // routingTable() already installs only the best route per prefix, so a
+  // higher-AD floating static stays out of the table while the primary is up.
   const table = routingTable(net, dev)
   const out = [
     'Codes: C - connected, S - static, O - OSPF, * - candidate default',

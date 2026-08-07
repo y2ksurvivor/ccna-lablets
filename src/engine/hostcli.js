@@ -5,6 +5,7 @@
 
 import { ping } from './l3.js'
 import { dhcpResolve } from './ipservices.js'
+import { observe } from './device.js'
 
 export class HostCLI {
   constructor(host, net) {
@@ -32,6 +33,7 @@ export class HostCLI {
   }
 
   ping(target) {
+    observe(this.dev, `ping ${target.toLowerCase()}`)
     const res = ping(this.net, this.dev.id, target)
     const out = [`Pinging ${target} with 32 bytes of data:`]
     if (res.ok) {
@@ -46,6 +48,7 @@ export class HostCLI {
   }
 
   ipconfig() {
+    observe(this.dev, 'ipconfig')
     // Static IP if set; otherwise show a DHCP-resolved lease (DHCP lablet).
     let ip = this.dev.ip, mask = this.dev.mask, gw = this.dev.gateway, via = ''
     if (!ip) {

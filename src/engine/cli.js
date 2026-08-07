@@ -13,11 +13,12 @@
 //   line      (config-line)#       line sub-config
 //   router    (config-router)#     routing protocol sub-config
 
-import { getInterface, canonicalIface, shortIface } from './device.js'
+import { getInterface, canonicalIface, shortIface, observe } from './device.js'
 import { pingIpv6 } from './ipv6.js'
 import {
   renderRunningConfig, renderIpIntBrief, renderVlanBrief,
-  renderCdpNeighbors, renderLldpNeighbors, renderEtherchannelSummary,
+  renderCdpNeighbors, renderLldpNeighbors, renderEtherchannelSummary, renderInterfacesTrunk,
+  renderInterfaces,
   renderIpRoute, renderOspfNeighbors,
   renderIpSsh, renderNtpStatus, renderNtpAssociations, renderNatTranslations,
   renderAccessLists, renderPortSecurity, renderIpv6IntBrief,
@@ -49,6 +50,15 @@ export class CLI {
   // Execute one command line. Returns array of output strings.
   execute(line) {
     const raw = line.trim()
+    // Remembered for the whole command so any handler, however deeply nested,
+    // can point a caret at its offending token without threading the raw line
+    // through every call. Must be the line as typed — including a `do` prefix —
+    // because the caret is aligned against what the terminal echoed.
+    this.rawLine = raw
+    // Snapshot the prompt too. `do <cmd>` flips the mode to EXEC while it runs,
+    // so prompt() would report the short "SW1#" while the terminal actually
+    // echoed "SW1(config)#" — the caret has to line up with what was echoed.
+    this.promptAtLine = this.prompt()
     if (raw === '') return []
     if (raw === '?') return formatHelp(this.helpTokens([]))
 
@@ -65,12 +75,12 @@ export class CLI {
       if (prefix.length > 0) {
         const table = COMMANDS[this.mode] || {}
         const m = matchCommand(table, prefix[0])
-        if (m.error) return this.renderMatchError(m, raw)
+        if (m.error) return this.renderMatchError(m)
       }
 
       const entries = this.helpTokens(prefix, partialWord)
       // Word help with no matches (e.g. "xyz?") is an invalid token in IOS.
-      if (entries.length === 0 && partialWord) return this.caretError(raw, partialWord)
+      if (entries.length === 0 && partialWord) return this.caretError(partialWord)
       return formatHelp(entries)
     }
 
@@ -92,24 +102,49 @@ export class CLI {
     if (tokens.length === 0) return []
     const table = COMMANDS[this.mode] || {}
     const match = matchCommand(table, tokens[0])
-    if (match.error) return this.renderMatchError(match, raw ?? tokens.join(' '))
+    if (match.error) return this.renderMatchError(match)
     const cmd = table[match.name]
+    // IOS rejects trailing tokens on a command that takes no arguments — it does
+    // not quietly run the command anyway. This matters most for `shutdown`:
+    // typing "sh run" in interface config resolves `sh` to `shutdown`, and
+    // without this check the port would be shut with no output at all.
+    if (cmd.noArgs && tokens.length > 1) {
+      return this.caretError(tokens[1])
+    }
     return cmd.run(this, tokens.slice(1), tokens)
   }
 
   // Render a typed match error the way IOS does. For an invalid token we print
   // a caret line under the offending token, aligned to the on-screen prompt.
-  renderMatchError(match, raw) {
+  renderMatchError(match) {
     if (match.error === 'ambiguous') {
       return [`% Ambiguous command:  "${match.token}"`]
     }
-    return this.caretError(raw, match.token)
+    return this.caretError(match.token)
   }
 
-  caretError(raw, token) {
-    const idx = token != null ? raw.indexOf(token) : Math.max(0, raw.length - 1)
-    const col = this.prompt().length + (idx < 0 ? 0 : idx)
-    return [`${' '.repeat(col)}^`, `% Invalid input detected at '^' marker.`]
+  // IOS's standard parse error: a caret under the offending token, aligned to
+  // the echoed line, then the message. `raw` defaults to the current command so
+  // callers deep in a handler only need to name the token. Matching on a whole
+  // word keeps the caret off an earlier substring — "do sho rn" must mark the
+  // "rn", not the "r" inside a previous word.
+  caretError(token, raw = this.rawLine ?? '') {
+    let idx
+    if (token == null) {
+      idx = Math.max(0, raw.length - 1)
+    } else {
+      const esc = String(token).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const m = new RegExp(`(^|\\s)${esc}(?=\\s|$)`).exec(raw)
+      idx = m ? m.index + m[1].length : raw.indexOf(token)
+      if (idx < 0) idx = 0
+    }
+    const promptLen = (this.promptAtLine ?? this.prompt()).length
+    return [`${' '.repeat(promptLen + idx)}^`, `% Invalid input detected at '^' marker.`]
+  }
+
+  // Shorthand for handlers rejecting an argument they could not interpret.
+  invalid(token) {
+    return this.caretError(token)
   }
 
   // Help entries available at current position.
@@ -177,12 +212,12 @@ const COMMANDS = {
   },
 
   enable: {
-    disable: { help: 'Turn off privileged commands', run: (cli) => { cli.mode = 'user'; return [] } },
+    disable: { help: 'Turn off privileged commands', noArgs: true, run: (cli) => { cli.mode = 'user'; return [] } },
     configure: {
       help: 'Enter configuration mode',
       argHelp: () => [{ name: 'terminal', help: 'Configure from the terminal' }],
       run: (cli, a) => {
-        if (a[0] && !'terminal'.startsWith(a[0])) return ['% Invalid input']
+        if (a[0] && !'terminal'.startsWith(a[0])) return cli.invalid(a[0])
         cli.mode = 'config'
         return ['Enter configuration commands, one per line.  End with CNTL/Z.']
       },
@@ -217,7 +252,7 @@ const COMMANDS = {
         return ['% Incomplete command.']
       },
     },
-    exit: { help: 'Exit from the EXEC', run: (cli) => { cli.mode = 'user'; return [] } },
+    exit: { help: 'Exit from the EXEC', noArgs: true, run: (cli) => { cli.mode = 'user'; return [] } },
   },
 
   config: {
@@ -245,7 +280,7 @@ const COMMANDS = {
       help: 'Configure VLAN',
       argHelp: () => [{ name: '<1-4094>', help: 'ISL VLAN IDs 1-4094' }],
       run: (cli, a) => {
-        if (cli.dev.kind !== 'switch') return ['% Invalid input detected']
+        if (cli.dev.kind !== 'switch') return cli.invalid(a[0])
         const id = parseInt(a[0], 10)
         if (!id || id < 1 || id > 4094) return ['% Invalid VLAN']
         if (!cli.dev.vlans[id]) cli.dev.vlans[id] = { id, name: `VLAN${String(id).padStart(4, '0')}` }
@@ -327,7 +362,7 @@ const COMMANDS = {
         ? [{ name: 'ospf', help: 'Open Shortest Path First (OSPF)' }]
         : [{ name: '<1-65535>', help: 'Process ID' }],
       run: (cli, a) => {
-        if (!'ospf'.startsWith(a[0] || 'x')) return ['% Invalid input detected']
+        if (!'ospf'.startsWith(a[0] || 'x')) return cli.invalid(a[0])
         const pid = parseInt(a[1], 10)
         if (!pid) return ['% Incomplete command.']
         if (!cli.dev.ospf) cli.dev.ospf = { pid, routerId: null, networks: [], passive: [] }
@@ -372,7 +407,7 @@ const COMMANDS = {
         const type = a[0]
         if ('vty'.startsWith(type || 'x')) { cli.ctx.line = ensureLine(cli.dev, 'vty'); cli.mode = 'line' }
         else if ('console'.startsWith(type || 'x')) { cli.ctx.line = ensureLine(cli.dev, 'console'); cli.mode = 'line' }
-        else return ['% Invalid input detected']
+        else return cli.invalid(type)
         return []
       },
     },
@@ -392,8 +427,8 @@ const COMMANDS = {
       run: (cli, a) => aclCmd(cli, a),
     },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
-    exit: { help: 'Exit config mode', run: (cli) => { cli.mode = 'enable'; return [] } },
-    end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
+    exit: { help: 'Exit config mode', noArgs: true, run: (cli) => { cli.mode = 'enable'; return [] } },
+    end: { help: 'Return to privileged EXEC', noArgs: true, run: (cli) => { cli.mode = 'enable'; return [] } },
   },
 
   iface: {
@@ -443,16 +478,16 @@ const COMMANDS = {
           if (!aclId || !dir) return ['% Incomplete command.']
           if (dir === 'in') cli.ctx.iface.accessGroupIn = aclId
           else if (dir === 'out') cli.ctx.iface.accessGroupOut = aclId
-          else return ['% Invalid input detected']
+          else return cli.invalid(dir)
           return []
         }
         if (a[0] === 'dhcp' && a[1] === 'snooping' && 'trust'.startsWith(a[2] || 'x')) { cli.ctx.iface.dhcpSnoopTrust = true; return [] }
         if (a[0] === 'arp' && a[1] === 'inspection' && 'trust'.startsWith(a[2] || 'x')) { cli.ctx.iface.arpInspectTrust = true; return [] }
-        return ['% Invalid input detected']
+        return cli.invalid(a[0])
       },
     },
     'description': { help: 'Interface description', argHelp: () => [{ name: 'LINE', help: 'Up to 240 characters describing this interface' }], run: (cli, a) => { cli.ctx.iface.description = a.join(' '); return [] } },
-    'shutdown': { help: 'Shut down interface', run: (cli) => { cli.ctx.iface.shutdown = true; cli.ctx.iface.lineProtocol = false; return [] } },
+    'shutdown': { help: 'Shut down interface', noArgs: true, run: (cli) => { cli.ctx.iface.shutdown = true; cli.ctx.iface.lineProtocol = false; return [] } },
     'switchport': { help: 'Set switching mode', argHelp: switchportArgHelp, run: (cli, a) => switchportCmd(cli, a) },
     'ipv6': {
       help: 'IPv6 interface subcommands',
@@ -470,7 +505,7 @@ const COMMANDS = {
           if (!list.includes(spec)) list.push(spec)
           return []
         }
-        return ['% Invalid input detected']
+        return cli.invalid(a[0])
       },
     },
     'cdp': {
@@ -501,14 +536,15 @@ const COMMANDS = {
       run: (cli, a) => channelGroupCmd(cli, a),
     },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
-    exit: { help: 'Exit interface config', run: (cli) => { cli.mode = 'config'; return [] } },
-    end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
+    exit: { help: 'Exit interface config', noArgs: true, run: (cli) => { cli.mode = 'config'; return [] } },
+    end: { help: 'Return to privileged EXEC', noArgs: true, run: (cli) => { cli.mode = 'enable'; return [] } },
   },
 
   vlan: {
     name: { help: 'Set VLAN name', run: (cli, a) => { cli.ctx.vlan.name = a[0] || cli.ctx.vlan.name; return [] } },
-    exit: { help: 'Exit VLAN config', run: (cli) => { cli.mode = 'config'; return [] } },
-    end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
+    'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
+    exit: { help: 'Exit VLAN config', noArgs: true, run: (cli) => { cli.mode = 'config'; return [] } },
+    end: { help: 'Return to privileged EXEC', noArgs: true, run: (cli) => { cli.mode = 'enable'; return [] } },
   },
 
   line: {
@@ -529,8 +565,9 @@ const COMMANDS = {
       run: (cli, a) => { cli.ctx.line.login = (a[0] && 'local'.startsWith(a[0])) ? 'local' : 'password'; return [] },
     },
     'password': { help: 'Set a password', run: (cli, a) => { cli.ctx.line.password = a.join(' '); return [] } },
-    exit: { help: 'Exit line config', run: (cli) => { cli.mode = 'config'; return [] } },
-    end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
+    'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
+    exit: { help: 'Exit line config', noArgs: true, run: (cli) => { cli.mode = 'config'; return [] } },
+    end: { help: 'Return to privileged EXEC', noArgs: true, run: (cli) => { cli.mode = 'enable'; return [] } },
   },
 
   dhcp: {
@@ -541,8 +578,9 @@ const COMMANDS = {
     },
     'default-router': { help: 'Default routers', run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.defaultRouter = a[0]; return [] } },
     'dns-server': { help: 'DNS servers', run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.dnsServer = a[0]; return [] } },
-    exit: { help: 'Exit DHCP pool config', run: (cli) => { cli.mode = 'config'; return [] } },
-    end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
+    'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
+    exit: { help: 'Exit DHCP pool config', noArgs: true, run: (cli) => { cli.mode = 'config'; return [] } },
+    end: { help: 'Return to privileged EXEC', noArgs: true, run: (cli) => { cli.mode = 'enable'; return [] } },
   },
 
   router: {
@@ -572,8 +610,8 @@ const COMMANDS = {
       },
     },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
-    exit: { help: 'Exit router config', run: (cli) => { cli.mode = 'config'; return [] } },
-    end: { help: 'Return to privileged EXEC', run: (cli) => { cli.mode = 'enable'; return [] } },
+    exit: { help: 'Exit router config', noArgs: true, run: (cli) => { cli.mode = 'config'; return [] } },
+    end: { help: 'Return to privileged EXEC', noArgs: true, run: (cli) => { cli.mode = 'enable'; return [] } },
   },
 }
 
@@ -595,6 +633,7 @@ function showArgHelp(cli, a) {
     if (cli.dev.kind === 'switch') {
       opts.push({ name: 'vlan', help: 'VTP VLAN status' })
       opts.push({ name: 'etherchannel', help: 'EtherChannel information' })
+      opts.push({ name: 'interfaces', help: 'Interface status and configuration' })
       opts.push({ name: 'port-security', help: 'Port security information' })
     }
     return opts
@@ -684,16 +723,43 @@ function saveConfig(cli) {
 }
 
 function negate(cli, a) {
+  if (!a.length) return ['% Incomplete command.']
+
+  // Resolve the negated word against the same command table the positive form
+  // uses, so abbreviations work: `no sh` is `no shutdown`, exactly as on IOS.
+  // Matching on the raw string here is why `no sh` used to be a silent no-op.
+  const table = COMMANDS[cli.mode] || {}
+  const m = matchCommand(table, a[0])
+  if (m.error) return cli.renderMatchError(m)
+  const name = m.name
+
   if (cli.mode === 'config') {
-    if (a[0] === 'cdp' && 'run'.startsWith(a[1] || 'x')) { cli.dev.cdpEnabled = false; return [] }
-    if (a[0] === 'lldp' && 'run'.startsWith(a[1] || 'x')) { cli.dev.lldpEnabled = false; return [] }
+    if (name === 'cdp' && 'run'.startsWith(a[1] || 'x')) { cli.dev.cdpEnabled = false; return [] }
+    if (name === 'lldp' && 'run'.startsWith(a[1] || 'x')) { cli.dev.lldpEnabled = false; return [] }
+  }
+  if (cli.mode === 'line') {
+    if (name === 'login') { cli.ctx.line.login = null; return [] }
+    if (name === 'password') { cli.ctx.line.password = null; return [] }
+    if (name === 'transport') {
+      if ('input'.startsWith(a[1] || 'x')) { cli.ctx.line.transportInput = []; return [] }
+      if ('output'.startsWith(a[1] || 'x')) { cli.ctx.line.transportOutput = []; return [] }
+      return ['% Incomplete command.']
+    }
+  }
+  if (cli.mode === 'vlan') {
+    if (name === 'name') { cli.ctx.vlan.name = `VLAN${String(cli.ctx.vlan.id).padStart(4, '0')}`; return [] }
+  }
+  if (cli.mode === 'dhcp') {
+    if (name === 'network') { cli.ctx.dhcpPool.network = null; cli.ctx.dhcpPool.mask = null; return [] }
+    if (name === 'default-router') { cli.ctx.dhcpPool.defaultRouter = null; return [] }
+    if (name === 'dns-server') { cli.ctx.dhcpPool.dnsServer = null; return [] }
   }
   if (cli.mode === 'iface') {
-    if (a[0] === 'shutdown') { cli.ctx.iface.shutdown = false; cli.ctx.iface.lineProtocol = !!cli.ctx.iface.ip || cli.dev.kind === 'switch'; return [] }
-    if (a[0] === 'ip' && a[1] === 'address') { cli.ctx.iface.ip = null; cli.ctx.iface.mask = null; return [] }
-    if (a[0] === 'description') { cli.ctx.iface.description = null; return [] }
-    if (a[0] === 'cdp' && 'enable'.startsWith(a[1] || 'x')) { cli.ctx.iface.cdpEnabled = false; return [] }
-    if (a[0] === 'channel-group') {
+    if (name === 'shutdown') { cli.ctx.iface.shutdown = false; cli.ctx.iface.lineProtocol = !!cli.ctx.iface.ip || cli.dev.kind === 'switch'; return [] }
+    if (name === 'ip' && 'address'.startsWith(a[1] || 'x') && a[1]) { cli.ctx.iface.ip = null; cli.ctx.iface.mask = null; return [] }
+    if (name === 'description') { cli.ctx.iface.description = null; return [] }
+    if (name === 'cdp' && 'enable'.startsWith(a[1] || 'x')) { cli.ctx.iface.cdpEnabled = false; return [] }
+    if (name === 'channel-group') {
       const cg = cli.ctx.iface.channelGroup
       if (cg) {
         const po = cli.dev.portChannels[cg.id]
@@ -703,7 +769,9 @@ function negate(cli, a) {
       return []
     }
   }
-  return []
+  // Recognised command, but this sim has no undo for it. Say so rather than
+  // silently reporting success on a command that did nothing.
+  return [`% Negating "${name}" is not supported in this lablet`]
 }
 
 function channelGroupCmd(cli, a) {
@@ -711,7 +779,7 @@ function channelGroupCmd(cli, a) {
   if (!id || id < 1 || id > 48) return ['% Incomplete command.']
   if ((a[1] || '') !== 'mode' && !'mode'.startsWith(a[1] || 'x')) return ['% Incomplete command.']
   const mode = a[2]
-  if (!['active', 'passive', 'on'].includes(mode)) return ['% Invalid input detected']
+  if (!['active', 'passive', 'on'].includes(mode)) return cli.invalid(mode)
   const ifc = cli.ctx.iface
   ifc.channelGroup = { id, mode }
   if (!cli.dev.portChannels[id]) cli.dev.portChannels[id] = { id, members: [] }
@@ -753,11 +821,11 @@ function switchportCmd(cli, a) {
     const ps = ifc.portSecurity
     if (a.length === 1) { ps.enabled = true; return [] }
     if (a[1] === 'maximum') { const n = parseInt(a[2], 10); if (!n) return ['% Incomplete command.']; ps.maximum = n; return [] }
-    if (a[1] === 'violation') { if (!['shutdown', 'restrict', 'protect'].includes(a[2])) return ['% Invalid input detected']; ps.violation = a[2]; return [] }
+    if (a[1] === 'violation') { if (!['shutdown', 'restrict', 'protect'].includes(a[2])) return cli.invalid(a[2]); ps.violation = a[2]; return [] }
     if (a[1] === 'mac-address') { if ('sticky'.startsWith(a[2] || 'x')) { ps.sticky = true; return [] } return [] }
     return ['% Incomplete command.']
   }
-  return ['% Invalid input detected']
+  return cli.invalid(a[0])
 }
 
 function ipConfigCmd(cli, a) {
@@ -803,7 +871,7 @@ function ipConfigCmd(cli, a) {
   if (a[0] === 'arp' && a[1] === 'inspection' && a[2] === 'vlan') {
     addVlanList(cli.dev.arpInspection.vlans, a[3]); return []
   }
-  return ['% Invalid input detected']
+  return cli.invalid(a[0])
 }
 
 function addVlanList(arr, spec) {
@@ -871,7 +939,7 @@ function ipNatCmd(cli, a) {
       return []
     }
   }
-  return ['% Invalid input detected']
+  return cli.invalid(a[0])
 }
 
 function cryptoCmd(cli, a) {
@@ -900,68 +968,116 @@ function networkCmd(cli, a) {
   // network <ip> <wildcard> area <id>
   const [ip, wc] = [a[0], a[1]]
   if (!ip || !wc) return ['% Incomplete command.']
-  if (!'area'.startsWith(a[2] || 'x')) return ['% Invalid input detected']
+  if (!'area'.startsWith(a[2] || 'x')) return cli.invalid(a[2])
   const area = parseInt(a[3], 10)
   if (Number.isNaN(area)) return ['% Incomplete command.']
   cli.dev.ospf.networks.push({ ip, wildcard: wc, area })
   return []
 }
 
+const KNOWN_SHOW_ROOTS = new Set(['ip', 'ipv6', 'ntp', 'cdp', 'lldp', 'interfaces', 'interface', 'int'])
+
 function showCmd(cli, a) {
   const sub = (a[0] || '').toLowerCase()
+  // Bare `show` is incomplete, not invalid. Without this guard every
+  // ''.startsWith() test below is vacuously true and the first one wins —
+  // which made `show` on its own print the version banner.
+  if (!sub) return ['% Incomplete command.']
   if ('running-config'.startsWith(sub) && sub.length >= 3) return renderRunningConfig(cli.dev)
   if (sub === 'run') return renderRunningConfig(cli.dev)
+  if (sub === 'interfaces' || sub === 'interface' || sub === 'int') {
+    const s2 = (a[1] || '').toLowerCase()
+    if (s2 && 'trunk'.startsWith(s2)) {
+      observe(cli.dev, 'interfaces trunk')
+      return renderInterfacesTrunk(cli.dev)
+    }
+    // `show interfaces` (all) or `show interfaces <name>` (one). IOS parses the
+    // interface name as part of the grammar, so an unknown one is a caret error.
+    const name = a[1]
+    if (name) {
+      const canon = canonicalIface(name)
+      if (!canon || !cli.dev.interfaces[canon]) return cli.invalid(name)
+    }
+    observe(cli.dev, 'interfaces')
+    return renderInterfaces(cli.dev, name || null)
+  }
   if (sub === 'ip') {
     const s2 = (a[1] || '').toLowerCase()
-    if ('interface'.startsWith(s2) && a[2] && 'brief'.startsWith((a[2] || '').toLowerCase())) return renderIpIntBrief(cli.dev)
-    if (s2 === 'ssh') return renderIpSsh(cli.dev)
+    if (!s2) return ['% Incomplete command.']
+    if ('interface'.startsWith(s2) && a[2] && 'brief'.startsWith((a[2] || '').toLowerCase())) {
+      observe(cli.dev, 'ip interface brief')
+      return renderIpIntBrief(cli.dev)
+    }
+    if (s2 === 'ssh') { observe(cli.dev, 'ip ssh'); return renderIpSsh(cli.dev) }
     if (s2 === 'nat') {
       const s3 = (a[2] || '').toLowerCase()
-      if ('translations'.startsWith(s3) && s3.length >= 1) return renderNatTranslations(cli.dev, cli.net)
-      if ('statistics'.startsWith(s3) && s3.length >= 1) return [`Total active translations: ${(cli.dev.nat?.statics.length) || 0}`]
+      if ('statistics'.startsWith(s3) && s3.length >= 1) {
+        observe(cli.dev, 'ip nat statistics')
+        return [`Total active translations: ${(cli.dev.nat?.statics.length) || 0}`]
+      }
+      observe(cli.dev, 'ip nat translations')
       return renderNatTranslations(cli.dev, cli.net)
     }
-    if ('route'.startsWith(s2) && s2.length >= 1) return renderIpRoute(cli.dev, cli.net)
+    if ('route'.startsWith(s2) && s2.length >= 1) {
+      observe(cli.dev, 'ip route')
+      return renderIpRoute(cli.dev, cli.net)
+    }
     if ('ospf'.startsWith(s2) && s2.length >= 1) {
       const s3 = (a[2] || '').toLowerCase()
-      if ('neighbor'.startsWith(s3) && s3.length >= 1) return renderOspfNeighbors(cli.dev, cli.net)
+      if ('neighbor'.startsWith(s3) && s3.length >= 1) {
+        observe(cli.dev, 'ip ospf neighbor')
+        return renderOspfNeighbors(cli.dev, cli.net)
+      }
       return [`Routing Process "ospf ${cli.dev.ospf?.pid ?? ''}" with ID ${cli.dev.ospf?.routerId ?? '(unset)'}`]
     }
   }
   if (sub === 'ntp') {
     const s2 = (a[1] || '').toLowerCase()
-    if ('associations'.startsWith(s2) && s2.length >= 1) return renderNtpAssociations(cli.dev, cli.net)
-    if ('status'.startsWith(s2) && s2.length >= 1) return renderNtpStatus(cli.dev, cli.net)
+    if ('associations'.startsWith(s2) && s2.length >= 1) {
+      observe(cli.dev, 'ntp associations')
+      return renderNtpAssociations(cli.dev, cli.net)
+    }
+    observe(cli.dev, 'ntp status')
     return renderNtpStatus(cli.dev, cli.net)
   }
-  if (sub === 'vlan') return renderVlanBrief(cli.dev)
+  if (sub === 'vlan') { observe(cli.dev, 'vlan'); return renderVlanBrief(cli.dev) }
   if (sub === 'ipv6') {
     const s2 = (a[1] || '').toLowerCase()
-    if ('interface'.startsWith(s2) && s2.length >= 1 && 'brief'.startsWith((a[2] || 'x').toLowerCase())) return renderIpv6IntBrief(cli.dev)
+    observe(cli.dev, 'ipv6 interface brief')
     return renderIpv6IntBrief(cli.dev)
   }
-  if ('access-lists'.startsWith(sub) && sub.length >= 4) return renderAccessLists(cli.dev)
-  if ('port-security'.startsWith(sub) && sub.length >= 4) return renderPortSecurity(cli.dev)
+  if ('access-lists'.startsWith(sub) && sub.length >= 4) {
+    observe(cli.dev, 'access-lists')
+    return renderAccessLists(cli.dev)
+  }
+  if ('port-security'.startsWith(sub) && sub.length >= 4) {
+    observe(cli.dev, 'port-security')
+    return renderPortSecurity(cli.dev)
+  }
   if (sub === 'cdp') {
     const s2 = (a[1] || '').toLowerCase()
     if ('neighbors'.startsWith(s2) && s2.length >= 1) {
       const detail = 'detail'.startsWith((a[2] || 'x').toLowerCase()) && a[2]
+      observe(cli.dev, 'cdp neighbors')
       return renderCdpNeighbors(cli.dev, cli.net, !!detail)
     }
     return ['Global CDP information:', `        CDP is ${cli.dev.cdpEnabled ? 'enabled' : 'not enabled'} globally`]
   }
   if (sub === 'lldp') {
     const s2 = (a[1] || '').toLowerCase()
-    if ('neighbors'.startsWith(s2) && s2.length >= 1) return renderLldpNeighbors(cli.dev, cli.net)
+    if ('neighbors'.startsWith(s2) && s2.length >= 1) {
+      observe(cli.dev, 'lldp neighbors')
+      return renderLldpNeighbors(cli.dev, cli.net)
+    }
     return ['Global LLDP Information:', `    Status: ${cli.dev.lldpEnabled ? 'ACTIVE' : 'INACTIVE'}`]
   }
   if ('etherchannel'.startsWith(sub) && sub.length >= 4) {
-    const s2 = (a[1] || '').toLowerCase()
-    if ('summary'.startsWith(s2)) return renderEtherchannelSummary(cli.dev, cli.net)
+    observe(cli.dev, 'etherchannel summary')
     return renderEtherchannelSummary(cli.dev, cli.net)
   }
   if ('version'.startsWith(sub)) return ['Cisco IOS Software (CCNA Lablets simulated), Version 15.x', `${cli.dev.hostname} uptime is 0 minutes`]
-  return ['% Invalid input detected']
+  // Mark the deepest token reached: `show ip bogus` should flag "bogus", not "ip".
+  return cli.invalid(KNOWN_SHOW_ROOTS.has(sub) && a[1] ? a[1] : a[0])
 }
 
 // Device-sourced ping. Switches/routers need an IP interface in the target's
@@ -974,6 +1090,10 @@ function pingFromDevice(net, dev, target) {
 function pingCmd(cli, a) {
   const target = a[0]
   if (!target) return ['% Incomplete command.']
+  // Keyed by target: pinging something else is not the verification the task
+  // asked for. Recorded whether or not the ping succeeds — a failed ping is a
+  // legitimate result to verify (see the ACL lablet).
+  observe(cli.dev, `ping ${target.toLowerCase()}`)
   const header = [
     `Type escape sequence to abort.`,
     `Sending 5, 100-byte ICMP Echos to ${target}, timeout is 2 seconds:`,

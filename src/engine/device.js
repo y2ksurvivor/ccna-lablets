@@ -32,6 +32,8 @@ export function createHost(opts = {}) {
     gateway: opts.gateway || null,
     // The single NIC name hosts present, for link wiring.
     nic: opts.nic || 'NIC',
+    // See createDevice().observed — hosts record `ipconfig` the same way.
+    observed: {},
   }
 }
 
@@ -81,7 +83,24 @@ export function createDevice(opts = {}) {
     // write/copy; null means "never saved". The grader compares it to the
     // current running-config to know whether unsaved changes exist.
     savedConfig: null,
+    // Canonical names of show commands the operator has run on this device, e.g.
+    // 'etherchannel summary'. Lets a "Verify: ..." task require that the learner
+    // actually looked at the output, not just that the config happens to be
+    // right. Still device state — the grader never reads keystrokes.
+    observed: {},
   }
+}
+
+// Record that a show command ran on this device. `key` is the canonical,
+// unabbreviated command name (see observe() calls in cli.js).
+export function observe(dev, key) {
+  if (!dev) return
+  if (!dev.observed) dev.observed = {}
+  dev.observed[key] = (dev.observed[key] || 0) + 1
+}
+
+export function hasObserved(dev, key) {
+  return !!dev && (dev.observed?.[key] || 0) > 0
 }
 
 // Interface helpers -----------------------------------------------------------
