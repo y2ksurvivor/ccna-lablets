@@ -4,7 +4,7 @@
 // host-to-router links (no switches in between), which keeps next-hop
 // resolution to neighbor() lookups.
 
-import { getInterface } from './device.js'
+import { getInterface, countTraffic } from './device.js'
 import { neighbor, l2HostReach, floodVlan } from './network.js'
 
 // --- address math ------------------------------------------------------------
@@ -182,10 +182,11 @@ function connectedDelivers(net, routerId, ifaceName, destIp) {
 // Can routerId deliver a packet to destIp? Follows the routing table hop by hop,
 // enforcing inbound ACLs (on the arrival interface) and outbound ACLs (on the
 // exit interface). srcIp enables ACL checks; pass null for control-plane checks.
-export function forwardFrom(net, routerId, destIp, srcIp = null, ingressIface = null, ttl = 16) {
+export function forwardFrom(net, routerId, destIp, srcIp = null, ingressIface = null, ttl = 16, trace = null) {
   if (ttl <= 0) return false
   const dev = net.devices[routerId]
   if (!dev) return false
+  if (trace && ingressIface) trace.push({ devId: routerId, iface: ingressIface, dir: 'in' })
   // Inbound ACL on the interface the packet arrived on.
   if (srcIp && ingressIface) {
     const inIfc = getInterface(dev, ingressIface)
@@ -200,13 +201,22 @@ export function forwardFrom(net, routerId, destIp, srcIp = null, ingressIface = 
   if (route.connected) {
     const exitIfc = getInterface(dev, route.iface)
     if (srcIp && exitIfc && !aclPermits(dev, exitIfc.accessGroupOut, srcIp, destIp)) return false
-    return connectedDelivers(net, routerId, route.iface, destIp)
+    if (trace) trace.push({ devId: routerId, iface: route.iface, dir: 'out' })
+    const delivered = connectedDelivers(net, routerId, route.iface, destIp)
+    // Delivery terminates here, so record the arrival on whichever device owns
+    // the destination address (hosts keep no counters and are skipped later).
+    if (delivered && trace) {
+      const owner = ownerOfIp(net, destIp)
+      if (owner && !owner.host) trace.push({ devId: owner.devId, iface: owner.iface, dir: 'in' })
+    }
+    return delivered
   }
   const hop = resolveNextHop(net, routerId, route.nextHop)
   if (!hop) return false
   const exitIfc = getInterface(dev, hop.exitPort)
   if (srcIp && exitIfc && !aclPermits(dev, exitIfc.accessGroupOut, srcIp, destIp)) return false
-  return forwardFrom(net, hop.nextRouter, destIp, srcIp, hop.ingressPort, ttl - 1)
+  if (trace) trace.push({ devId: routerId, iface: hop.exitPort, dir: 'out' })
+  return forwardFrom(net, hop.nextRouter, destIp, srcIp, hop.ingressPort, ttl - 1, trace)
 }
 
 function sameSubnet(aIp, bIp, mask) {
@@ -215,7 +225,7 @@ function sameSubnet(aIp, bIp, mask) {
 }
 
 // One-way delivery from a host to destIp (same subnet direct, else via gateway).
-function hostForward(net, hostId, destIp) {
+function hostForward(net, hostId, destIp, trace = null) {
   const host = net.devices[hostId]
   if (!host || !host.ip) return false
   if (sameSubnet(host.ip, destIp, host.mask)) {
@@ -241,7 +251,7 @@ function hostForward(net, hostId, destIp) {
   const gwDev = net.devices[gwOwner.devId]
   const gwIfc = getInterface(gwDev, gwOwner.iface)
   if (!gwIfc || gwIfc.shutdown) return false
-  return forwardFrom(net, gwDev.id, destIp, host.ip, gwIfc.name)
+  return forwardFrom(net, gwDev.id, destIp, host.ip, gwIfc.name, 16, trace)
 }
 
 // Unified host ping used everywhere: same-subnet L2 (incl. VLANs) or routed
@@ -252,15 +262,17 @@ export function ping(net, srcHostId, destIp) {
   const dstOwner = ownerOfIp(net, destIp)
   if (!dstOwner) return { ok: false, reason: 'destination unknown' }
 
-  const forward = hostForward(net, srcHostId, destIp)
+  const trace = []
+  const forward = hostForward(net, srcHostId, destIp, trace)
   if (!forward) return { ok: false, reason: 'no route to destination' }
 
   // Return path: destination host (or router) must reach the source IP back.
   let back
-  if (dstOwner.host) back = hostForward(net, dstOwner.devId, src.ip)
-  else back = forwardFrom(net, dstOwner.devId, src.ip)
+  if (dstOwner.host) back = hostForward(net, dstOwner.devId, src.ip, trace)
+  else back = forwardFrom(net, dstOwner.devId, src.ip, null, null, 16, trace)
   if (!back) return { ok: false, reason: 'no return route' }
 
+  applyTrace(net, trace, 4, 74) // 4 echoes, 32 bytes data + headers
   return { ok: true, reason: 'reply' }
 }
 
@@ -292,14 +304,28 @@ export function pingFromDevice(net, devId, destIp) {
 
   const dstOwner = ownerOfIp(net, destIp)
   if (!dstOwner) return { ok: false, reason: 'destination unknown' }
-  if (!forwardFrom(net, devId, destIp, srcIp)) return { ok: false, reason: 'no route to destination' }
+  const trace = []
+  if (!forwardFrom(net, devId, destIp, srcIp, null, 16, trace)) {
+    return { ok: false, reason: 'no route to destination' }
+  }
 
   const back = dstOwner.host
-    ? hostForward(net, dstOwner.devId, srcIp)
-    : forwardFrom(net, dstOwner.devId, srcIp)
+    ? hostForward(net, dstOwner.devId, srcIp, trace)
+    : forwardFrom(net, dstOwner.devId, srcIp, null, null, 16, trace)
   if (!back) return { ok: false, reason: 'no return route' }
 
+  applyTrace(net, trace, 5, 100) // IOS sends 5 x 100-byte echoes
   return { ok: true, reason: 'reply' }
+}
+
+// Roll a successful ping's path up into interface counters. Only called once the
+// round trip is known to work, so counters never move for a ping that failed.
+function applyTrace(net, trace, packets, bytesEach) {
+  for (const hop of trace) {
+    const dev = net.devices[hop.devId]
+    if (!dev || dev.kind === 'host') continue
+    countTraffic(getInterface(dev, hop.iface), hop.dir, packets, packets * bytesEach)
+  }
 }
 
 // --- OSPF (single area SPF) --------------------------------------------------

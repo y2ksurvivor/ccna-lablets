@@ -125,6 +125,14 @@ export function logIfaceState(dev, ifc, wasShut, hadProto) {
   return out
 }
 
+// Record traffic across an interface. `dir` is 'in' or 'out'.
+export function countTraffic(ifc, dir, packets, bytes) {
+  const c = ifc && ifc.counters
+  if (!c) return
+  if (dir === 'in') { c.inPackets += packets; c.inBytes += bytes }
+  else { c.outPackets += packets; c.outBytes += bytes }
+}
+
 export function hasObserved(dev, key) {
   return !!dev && (dev.observed?.[key] || 0) > 0
 }
@@ -169,6 +177,18 @@ export function getInterface(dev, name) {
       // link
       connected: false, // set true when a link is attached
       lineProtocol: false,
+      // Traffic and error counters, as `show interfaces` reports them. The
+      // in/out figures move as pings traverse the interface; the error fields
+      // stay zero unless a scenario seeds them (blueprint 1.4 asks the learner
+      // to spot collisions, CRC and duplex problems in this output).
+      counters: {
+        inPackets: 0, inBytes: 0, inBroadcasts: 0,
+        outPackets: 0, outBytes: 0,
+        runts: 0, giants: 0, throttles: 0,
+        inErrors: 0, crc: 0, frame: 0, overrun: 0, ignored: 0,
+        outErrors: 0, collisions: 0, lateCollision: 0, deferred: 0,
+        interfaceResets: 0, lostCarrier: 0, noCarrier: 0, babbles: 0,
+      },
     }
   }
   return dev.interfaces[canon]

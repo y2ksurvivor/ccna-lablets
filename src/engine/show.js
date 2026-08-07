@@ -177,9 +177,32 @@ export function renderInterfaces(dev, filter = null) {
       ? `  Internet address is ${ifc.ip}/${maskToLen(ifc.mask)}`
       : '  Internet address is not set')
     for (const a of (ifc.ipv6 || [])) out.push(`  IPv6 address is ${a}`)
-    out.push('  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec')
+    out.push('  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 100 usec,')
+    out.push('     reliability 255/255, txload 1/255, rxload 1/255')
     out.push('  Encapsulation ARPA, loopback not set')
+    out.push('  Keepalive set (10 sec)')
     out.push('  Full-duplex, 1000Mb/s, media type is RJ45')
+    out.push('  ARP type: ARPA, ARP Timeout 04:00:00')
+    out.push('  Last input never, output never, output hang never')
+    out.push('  Last clearing of "show interface" counters never')
+    out.push('  Input queue: 0/75/0/0 (size/max/drops/flushes); Total output drops: 0')
+    out.push('  Queueing strategy: fifo')
+    out.push('  Output queue: 0/40 (size/max)')
+    out.push('  5 minute input rate 0 bits/sec, 0 packets/sec')
+    out.push('  5 minute output rate 0 bits/sec, 0 packets/sec')
+    const c = ifc.counters || {}
+    const n = (k) => c[k] || 0
+    out.push(`     ${n('inPackets')} packets input, ${n('inBytes')} bytes, 0 no buffer`)
+    out.push(`     Received ${n('inBroadcasts')} broadcasts (0 IP multicasts)`)
+    out.push(`     ${n('runts')} runts, ${n('giants')} giants, ${n('throttles')} throttles`)
+    out.push(`     ${n('inErrors')} input errors, ${n('crc')} CRC, ${n('frame')} frame, ${n('overrun')} overrun, ${n('ignored')} ignored`)
+    out.push(`     0 watchdog, 0 multicast, 0 pause input`)
+    out.push(`     ${n('outPackets')} packets output, ${n('outBytes')} bytes, 0 underruns`)
+    out.push(`     ${n('outErrors')} output errors, ${n('collisions')} collisions, ${n('interfaceResets')} interface resets`)
+    out.push(`     0 unknown protocol drops`)
+    out.push(`     ${n('babbles')} babbles, ${n('lateCollision')} late collision, ${n('deferred')} deferred`)
+    out.push(`     ${n('lostCarrier')} lost carrier, ${n('noCarrier')} no carrier, 0 pause output`)
+    out.push(`     0 output buffer failures, 0 output buffers swapped out`)
   }
   return out
 }

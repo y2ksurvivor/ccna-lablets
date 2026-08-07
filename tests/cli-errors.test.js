@@ -120,6 +120,72 @@ describe('show ip interface brief matches IOS layout', () => {
   })
 })
 
+describe('interface counters', () => {
+  const routed = () => {
+    const sim = getScenario('static-routing').build()
+    const cfg = {
+      R1: ['ip route 0.0.0.0 0.0.0.0 10.1.12.2'],
+      R2: ['ip route 192.168.1.0 255.255.255.0 10.1.12.1',
+        'ip route 192.168.3.0 255.255.255.0 10.1.23.2'],
+      R3: ['ip route 0.0.0.0 0.0.0.0 10.1.23.1'],
+    }
+    for (const [d, cmds] of Object.entries(cfg)) {
+      for (const c of ['enable', 'conf t', ...cmds, 'end']) sim.consoles[d].execute(c)
+    }
+    const counters = (dev, ifc) => sim.net.devices[dev].interfaces[ifc].counters
+    return { sim, counters }
+  }
+
+  it('start at zero and appear in show interfaces', () => {
+    const { sim } = routed()
+    sim.consoles.R1.execute('enable')
+    const out = sim.consoles.R1.execute('show interfaces gi0/1').join('\n')
+    expect(out).toContain('0 packets input, 0 bytes, 0 no buffer')
+    expect(out).toContain('0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored')
+    expect(out).toContain('Last clearing of "show interface" counters never')
+  })
+
+  it('count 5 x 100-byte echoes each way on every hop of the path', () => {
+    const { sim, counters } = routed()
+    sim.consoles.R1.execute('ping 192.168.3.10')
+    // Echo out and reply in on the source; the mirror image on each transit hop.
+    for (const [dev, ifc] of [['R1', 'GigabitEthernet0/1'], ['R2', 'GigabitEthernet0/1'],
+      ['R2', 'GigabitEthernet0/2'], ['R3', 'GigabitEthernet0/1'], ['R3', 'GigabitEthernet0/0']]) {
+      const c = counters(dev, ifc)
+      expect({ dev, ifc, ...c }).toMatchObject({
+        inPackets: 5, inBytes: 500, outPackets: 5, outBytes: 500,
+      })
+    }
+  })
+
+  it('count host pings at 4 x 74 bytes', () => {
+    const { sim, counters } = routed()
+    sim.consoles.PC1.execute('ping 192.168.3.10')
+    expect(counters('R2', 'GigabitEthernet0/1')).toMatchObject({
+      inPackets: 4, inBytes: 296, outPackets: 4, outBytes: 296,
+    })
+  })
+
+  it('do not move for a ping that fails', () => {
+    const { sim, counters } = routed()
+    sim.consoles.R1.execute('ping 10.9.9.9')
+    expect(counters('R1', 'GigabitEthernet0/1')).toMatchObject({
+      inPackets: 0, outPackets: 0,
+    })
+  })
+
+  it('error counters are seedable so a scenario can stage a faulty link', () => {
+    const { sim } = routed()
+    Object.assign(sim.net.devices.R1.interfaces['GigabitEthernet0/1'].counters,
+      { crc: 421, inErrors: 421, collisions: 17, lateCollision: 3 })
+    sim.consoles.R1.execute('enable')
+    const out = sim.consoles.R1.execute('show interfaces gi0/1').join('\n')
+    expect(out).toContain('421 input errors, 421 CRC')
+    expect(out).toContain('0 output errors, 17 collisions')
+    expect(out).toContain('0 babbles, 3 late collision')
+  })
+})
+
 describe('interface state changes log like IOS', () => {
   const iface = () => {
     const sim = getScenario('ipv4-addressing').build()
