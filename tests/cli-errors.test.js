@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { getScenario } from '../src/scenarios/index.js'
+import { grade } from '../src/engine/grader.js'
 
 const INVALID = /% Invalid input detected/
 
@@ -117,6 +118,42 @@ describe('show ip interface brief matches IOS layout', () => {
   it('reports admin-down and unassigned interfaces', () => {
     const out = cli().execute('show ip interface brief').join('\n')
     expect(out).toMatch(/GigabitEthernet0\/1 +unassigned +YES unset +administratively down down/)
+  })
+})
+
+describe('access ports must be explicitly configured', () => {
+  const vlanLab = (cmds) => {
+    const sim = getScenario('vlan-basics').build()
+    for (const sw of ['SW1', 'SW2']) {
+      for (const c of ['enable', 'conf t', 'vlan 10', 'exit', 'interface gi0/1',
+        ...cmds, 'end']) sim.consoles[sw].execute(c)
+    }
+    return sim
+  }
+  const access10 = (sim) => grade(getScenario('vlan-basics'), sim.net)
+    .find(t => t.id === 'access10').pass
+
+  it('requires both switchport mode access and switchport access vlan', () => {
+    expect(access10(vlanLab(['switchport mode access', 'switchport access vlan 10']))).toBe(true)
+  })
+
+  // Switch ports sit in access mode internally, so the VLAN command alone used
+  // to satisfy a task whose text asks for both.
+  it('is not satisfied by the vlan command alone', () => {
+    expect(access10(vlanLab(['switchport access vlan 10']))).toBe(false)
+  })
+
+  it('is not satisfied by the mode command alone', () => {
+    expect(access10(vlanLab(['switchport mode access']))).toBe(false)
+  })
+
+  it('running-config omits switchport mode access until it is configured', () => {
+    const sim = getScenario('discovery-protocols').build()
+    const cli = sim.consoles.SW1
+    cli.execute('enable')
+    expect(cli.execute('show run').join('\n')).not.toContain('switchport mode access')
+    for (const c of ['conf t', 'interface gi0/1', 'switchport mode access', 'end']) cli.execute(c)
+    expect(cli.execute('show run').join('\n')).toContain('switchport mode access')
   })
 })
 

@@ -807,8 +807,8 @@ function channelGroupCmd(cli, a) {
 function switchportCmd(cli, a) {
   const ifc = cli.ctx.iface
   if (a[0] === 'mode') {
-    if (a[1] === 'access') { ifc.mode = 'access'; return [] }
-    if (a[1] === 'trunk') { ifc.mode = 'trunk'; return [] }
+    if (a[1] === 'access') { ifc.mode = 'access'; ifc.modeExplicit = true; return [] }
+    if (a[1] === 'trunk') { ifc.mode = 'trunk'; ifc.modeExplicit = true; return [] }
     return ['% Incomplete command.']
   }
   if (a[0] === 'access' && a[1] === 'vlan') {

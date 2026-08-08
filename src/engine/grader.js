@@ -250,11 +250,15 @@ export function vlanExists(net, devId, id) {
   return !!(d && d.vlans && d.vlans[id])
 }
 
+// Returns the access VLAN only when the port was *explicitly* made an access
+// port. Switch ports start in access mode internally, so without the
+// modeExplicit check `switchport access vlan X` alone would satisfy a task that
+// asks for both commands.
 export function portAccessVlan(net, devId, ifaceName) {
   const d = net.devices[devId]
   if (!d) return null
   const ifc = d.interfaces[canonicalIface(ifaceName)]
-  if (!ifc || ifc.mode !== 'access') return null
+  if (!ifc || ifc.mode !== 'access' || !ifc.modeExplicit) return null
   return ifc.accessVlan || 1
 }
 

@@ -50,7 +50,8 @@ export function renderRunningConfig(dev) {
         out.push(' switchport mode trunk')
       } else if (ifc.mode === 'access') {
         if (ifc.accessVlan && ifc.accessVlan !== 1) out.push(` switchport access vlan ${ifc.accessVlan}`)
-        out.push(' switchport mode access')
+        // Only when configured — running-config never shows defaults.
+        if (ifc.modeExplicit) out.push(' switchport mode access')
       }
       if (ifc.portSecurity?.enabled) {
         out.push(' switchport port-security')

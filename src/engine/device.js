@@ -155,6 +155,11 @@ export function getInterface(dev, name) {
       description: null,
       // switchport
       mode: dev.kind === 'switch' ? 'access' : null, // 'access' | 'trunk'
+      // Whether `switchport mode ...` was actually issued. Real switch ports
+      // default to dynamic negotiation, not hard access, so "left at the
+      // default" and "explicitly configured as access" are different states —
+      // and only the second should satisfy a task or appear in show run.
+      modeExplicit: false,
       accessVlan: dev.kind === 'switch' ? 1 : null,
       trunkNativeVlan: dev.kind === 'switch' ? 1 : null,
       trunkAllowed: 'all', // 'all' | array of vlan ids
