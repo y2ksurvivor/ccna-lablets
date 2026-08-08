@@ -57,6 +57,8 @@ export function createDevice(opts = {}) {
     routes: [], // static routes: { proto, prefix, mask, nextHop, ad, metric }
     ospf: null, // { pid, routerId, networks: [{ip, wildcard, area}], passive: [] }
     ipv6Routing: false, // ipv6 unicast-routing
+    // IPv6 static routes: { prefix, len, nextHop, prefixBig, ad }
+    ipv6Routes: [],
     arp: {}, // ip -> mac
     // Global config
     enableSecret: null,

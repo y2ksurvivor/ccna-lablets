@@ -93,6 +93,20 @@ const CASES = {
     verify: { R2: ['show ip route'], R3: ['show ip route'], PC1: ['ping 192.168.3.10'] },
   },
 
+  'ipv6-static-routing': {
+    gated: ['route-check', 'ping'],
+    config: {
+      R1: ['enable', 'conf t', 'ipv6 unicast-routing',
+        'ipv6 route ::/0 2001:DB8:ACAD:12::2', 'end', 'write memory'],
+      R2: ['enable', 'conf t', 'ipv6 unicast-routing',
+        'ipv6 route 2001:DB8:ACAD:A::/64 2001:DB8:ACAD:12::1',
+        'ipv6 route 2001:DB8:ACAD:C::/64 2001:DB8:ACAD:23::2', 'end', 'write memory'],
+      R3: ['enable', 'conf t', 'ipv6 unicast-routing',
+        'ipv6 route ::/0 2001:DB8:ACAD:23::1', 'end', 'write memory'],
+    },
+    verify: { R2: ['show ipv6 route'], R1: ['ping 2001:DB8:ACAD:C::1'] },
+  },
+
   ospf: {
     gated: ['nbr-check', 'ping'],
     config: {

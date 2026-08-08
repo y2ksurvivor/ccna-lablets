@@ -173,7 +173,7 @@ export function ifaceHasIp(net, devId, ifaceName, ip, mask) {
   return !!(i && i.ip === ip && i.mask === mask && !i.shutdown)
 }
 
-import { normIpv6, pingIpv6 } from './ipv6.js'
+import { normIpv6, pingIpv6, splitPrefix, netV6, ipv6ToBig, routeLookupV6 } from './ipv6.js'
 
 // Interface carries this IPv6 address (any prefix length match on the address).
 // Interface carries this IPv6 address. If `addr` names a prefix length, that
@@ -194,6 +194,28 @@ export function ifaceHasIpv6(net, devId, ifaceName, addr) {
 
 export function ipv6PingWorks(net, srcDevId, target) {
   return pingIpv6(net, srcDevId, target).ok
+}
+
+// A configured IPv6 static route with this exact prefix/length, optionally
+// pinned to a next hop — the mirror of hasStaticRoute() for IPv4.
+export function hasIpv6Route(net, devId, spec, opts = {}) {
+  const want = splitPrefix(spec)
+  if (!want) return false
+  const wantNet = netV6(want.addr, want.len)
+  return (net.devices[devId]?.ipv6Routes || []).some(r =>
+    r.len === want.len && netV6(r.prefixBig, r.len) === wantNet &&
+    (opts.nextHop == null ||
+      ipv6ToBig(r.nextHop) === ipv6ToBig(opts.nextHop)) &&
+    (opts.ad == null || r.ad === opts.ad))
+}
+
+// Which IPv6 route the device would actually use for `target`.
+export function ipv6RouteVia(net, devId, target) {
+  const dev = net.devices[devId]
+  const big = ipv6ToBig(String(target).split('/')[0])
+  if (!dev || big === null) return null
+  const r = routeLookupV6(net, dev, big)
+  return r ? { proto: r.proto, nextHop: r.nextHop || null, len: r.len, ad: r.ad } : null
 }
 
 export function ipv6RoutingOn(net, devId) {

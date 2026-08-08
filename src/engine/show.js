@@ -5,6 +5,7 @@
 import { discoveryNeighbors, etherchannelUp } from './network.js'
 import { getInterface, canonicalIface } from './device.js'
 import { routingTable, ospfNeighbors, maskToLen } from './l3.js'
+import { routingTableV6, bigToIpv6 } from './ipv6.js'
 import { ntpSynced, natTranslations } from './ipservices.js'
 
 export function renderRunningConfig(dev) {
@@ -12,6 +13,10 @@ export function renderRunningConfig(dev) {
   if (dev.servicePasswordEncryption) out.push('service password-encryption', '!')
   out.push(`hostname ${dev.hostname}`, '!')
   if (dev.ipv6Routing) out.push('ipv6 unicast-routing', '!')
+  for (const r of (dev.ipv6Routes || [])) {
+    out.push(`ipv6 route ${r.prefix}/${r.len} ${r.nextHop}${r.ad && r.ad !== 1 ? ' ' + r.ad : ''}`)
+  }
+  if ((dev.ipv6Routes || []).length) out.push('!')
   if (dev.enableSecret) out.push(`enable secret ${dev.enableSecret}`)
   if (dev.enablePassword) out.push(`enable password ${dev.enablePassword}`)
   if (dev.enableSecret || dev.enablePassword) out.push('!')
@@ -204,6 +209,28 @@ export function renderInterfaces(dev, filter = null) {
     out.push(`     ${n('babbles')} babbles, ${n('lateCollision')} late collision, ${n('deferred')} deferred`)
     out.push(`     ${n('lostCarrier')} lost carrier, ${n('noCarrier')} no carrier, 0 pause output`)
     out.push(`     0 output buffer failures, 0 output buffers swapped out`)
+  }
+  return out
+}
+
+export function renderIpv6Route(dev, net) {
+  if (!dev.ipv6Routing && !(dev.ipv6Routes || []).length) return ['% IPv6 routing not enabled']
+  const table = routingTableV6(net, dev)
+  const out = [
+    `IPv6 Routing Table - default - ${table.length} entries`,
+    'Codes: C - Connected, L - Local, S - Static',
+  ]
+  table.sort((a, b) => (a.len - b.len))
+  for (const r of table) {
+    const prefix = `${bigToIpv6(r.netBig)}/${r.len}`
+    if (r.connected) {
+      const ifc = getInterface(dev, r.iface)
+      out.push(`C   ${prefix} [0/0]`)
+      out.push(`     via ${ifc ? ifc.shortName : r.iface}, directly connected`)
+    } else {
+      out.push(`S   ${prefix} [${r.ad}/0]`)
+      out.push(`     via ${r.nextHop}`)
+    }
   }
   return out
 }

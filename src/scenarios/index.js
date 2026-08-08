@@ -12,6 +12,7 @@ import { aclLab } from './acl.js'
 import { l2Security } from './l2-security.js'
 import { ipv4Addressing } from './ipv4-addressing.js'
 import { ipv6Addressing } from './ipv6-addressing.js'
+import { ipv6StaticRouting } from './ipv6-static-routing.js'
 
 // Registry of available lablets, grouped loosely by blueprint domain.
 export const scenarios = [
@@ -20,7 +21,8 @@ export const scenarios = [
   // Network Access (2.x)
   vlanBasics, discoveryProtocols, etherchannel,
   // IP Connectivity (3.x)
-  staticRouting, ospfLab,
+  staticRouting,
+  ipv6StaticRouting, ospfLab,
   // IP Services (4.x)
   sshLab, ntpLab, dhcpLab, natLab,
   // Security (5.x)

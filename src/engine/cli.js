@@ -14,7 +14,7 @@
 //   router    (config-router)#     routing protocol sub-config
 
 import { getInterface, canonicalIface, shortIface, observe, logIfaceState } from './device.js'
-import { pingIpv6 } from './ipv6.js'
+import { pingIpv6, splitPrefix, ipv6ToBig, bigToIpv6, netV6 } from './ipv6.js'
 import { pingFromDevice as devicePing } from './l3.js'
 import {
   renderRunningConfig, renderIpIntBrief, renderVlanBrief,
@@ -22,7 +22,7 @@ import {
   renderInterfaces,
   renderIpRoute, renderOspfNeighbors,
   renderIpSsh, renderNtpStatus, renderNtpAssociations, renderNatTranslations,
-  renderAccessLists, renderPortSecurity, renderIpv6IntBrief,
+  renderAccessLists, renderPortSecurity, renderIpv6IntBrief, renderIpv6Route,
 } from './show.js'
 
 export class CLI {
@@ -327,9 +327,13 @@ const COMMANDS = {
     },
     'ipv6': {
       help: 'Global IPv6 configuration',
-      argHelp: () => [{ name: 'unicast-routing', help: 'Enable unicast routing' }],
+      argHelp: (cli, a) => a.length === 0
+        ? [{ name: 'unicast-routing', help: 'Enable unicast routing' },
+          { name: 'route', help: 'Configure static routes' }]
+        : [{ name: 'X:X:X:X::X/<0-128>', help: 'IPv6 prefix' }],
       run: (cli, a) => {
-        if ('unicast-routing'.startsWith(a[0] || 'x')) { cli.dev.ipv6Routing = true; return [] }
+        if ('unicast-routing'.startsWith(a[0] || 'x') && a[0]) { cli.dev.ipv6Routing = true; return [] }
+        if (a[0] === 'route') return ipv6RouteCmd(cli, a.slice(1))
         return ['% Incomplete command.']
       },
     },
@@ -844,6 +848,26 @@ function switchportCmd(cli, a) {
   return cli.invalid(a[0])
 }
 
+// ipv6 route <prefix>/<len> <next-hop> [ad]
+function ipv6RouteCmd(cli, a) {
+  const [spec, nh] = [a[0], a[1]]
+  if (!spec || !nh) return ['% Incomplete command.']
+  if (!spec.includes('/')) return cli.invalid(spec)
+  const p = splitPrefix(spec)
+  if (!p) return cli.invalid(spec)
+  const nhBig = ipv6ToBig(nh)
+  if (nhBig === null) return cli.invalid(nh)
+  const ad = a[2] ? parseInt(a[2], 10) : 1
+  if (Number.isNaN(ad)) return cli.invalid(a[2])
+  const prefix = bigToIpv6(netV6(p.addr, p.len))
+  cli.dev.ipv6Routes = cli.dev.ipv6Routes
+    .filter(r => !(r.prefix === prefix && r.len === p.len && r.nextHop === nh))
+  cli.dev.ipv6Routes.push({
+    prefix, len: p.len, nextHop: nh, prefixBig: netV6(p.addr, p.len), ad,
+  })
+  return []
+}
+
 function ipConfigCmd(cli, a) {
   // ip route <prefix> <mask> <next-hop> [ad]
   if (a[0] === 'route') {
@@ -1059,6 +1083,10 @@ function showCmd(cli, a) {
   if (sub === 'vlan') { observe(cli.dev, 'vlan'); return renderVlanBrief(cli.dev) }
   if (sub === 'ipv6') {
     const s2 = (a[1] || '').toLowerCase()
+    if (s2 && 'route'.startsWith(s2)) {
+      observe(cli.dev, 'ipv6 route')
+      return renderIpv6Route(cli.dev, cli.net)
+    }
     observe(cli.dev, 'ipv6 interface brief')
     return renderIpv6IntBrief(cli.dev)
   }
@@ -1118,8 +1146,9 @@ function pingCmd(cli, a) {
   // IPv6 target (contains ':') — same-link reachability.
   if (target.includes(':')) {
     const res6 = pingIpv6(cli.net, cli.dev.id, target)
-    return [...header, res6.ok ? '!!!!!' : '.....',
-      `Success rate is ${res6.ok ? 100 : 0} percent (${res6.ok ? '5/5' : '0/5'})`]
+    return [...header, res6.ok ? '!!!!!' : '.....', res6.ok
+      ? 'Success rate is 100 percent (5/5), round-trip min/avg/max = 1/2/4 ms'
+      : 'Success rate is 0 percent (0/5)']
   }
   // A switch/router pings from itself. We approximate by treating any device
   // interface IP in the destination's subnet as the source. Full L3 ping from
