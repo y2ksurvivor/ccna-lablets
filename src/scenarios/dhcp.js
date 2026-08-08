@@ -64,7 +64,8 @@ export const dhcpLab = {
         'R2(config)# ip dhcp pool LAN1 → network 192.168.1.0 255.255.255.0 → default-router 192.168.1.1'],
       check: (net) => {
         const p = Object.values(net.devices.R2.dhcpPools)[0]
-        return !!(p && p.network === '192.168.1.0' && p.defaultRouter === '192.168.1.1')
+        return !!(p && p.network === '192.168.1.0' && p.mask === '255.255.255.0' &&
+          p.defaultRouter === '192.168.1.1')
       },
     },
     {

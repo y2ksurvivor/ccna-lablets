@@ -176,12 +176,20 @@ export function ifaceHasIp(net, devId, ifaceName, ip, mask) {
 import { normIpv6, pingIpv6 } from './ipv6.js'
 
 // Interface carries this IPv6 address (any prefix length match on the address).
+// Interface carries this IPv6 address. If `addr` names a prefix length, that
+// must match too — blueprint 1.8 is "IPv6 addressing and prefix", so a /48 is
+// not an acceptable answer to a task that asked for a /64.
 export function ifaceHasIpv6(net, devId, ifaceName, addr) {
   const d = net.devices[devId]
   const i = d && d.interfaces[canonicalIface(ifaceName)]
   if (!i || i.shutdown) return false
-  const target = normIpv6(addr)
-  return (i.ipv6 || []).some(a => normIpv6(a) === target)
+  const [wantAddr, wantLen] = String(addr).split('/')
+  const target = normIpv6(wantAddr)
+  return (i.ipv6 || []).some(a => {
+    const [gotAddr, gotLen] = String(a).split('/')
+    if (normIpv6(gotAddr) !== target) return false
+    return wantLen == null || String(gotLen) === String(wantLen)
+  })
 }
 
 export function ipv6PingWorks(net, srcDevId, target) {
@@ -206,10 +214,17 @@ export function globalDiscoveryOn(net, devId, proto) {
 
 // --- EtherChannel checks -----------------------------------------------------
 
-export function portInChannel(net, devId, ifaceName, id) {
+// Port belongs to channel-group `id`. Pass { protocol: 'lacp' } when the task
+// names a protocol — otherwise `mode on` (static bundling, no negotiation at
+// all) would satisfy a task that asks for LACP.
+export function portInChannel(net, devId, ifaceName, id, opts = {}) {
   const d = net.devices[devId]
   const ifc = d && d.interfaces[canonicalIface(ifaceName)]
-  return !!(ifc && ifc.channelGroup && ifc.channelGroup.id === id)
+  if (!ifc || !ifc.channelGroup || ifc.channelGroup.id !== id) return false
+  if (opts.protocol === 'lacp') {
+    return ifc.channelGroup.mode === 'active' || ifc.channelGroup.mode === 'passive'
+  }
+  return true
 }
 
 export function channelUp(net, devId, id) {

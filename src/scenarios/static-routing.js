@@ -14,7 +14,7 @@ import { createNetwork, addDevice, addLink } from '../engine/network.js'
 import { createDevice, createHost, getInterface, resetCounters } from '../engine/device.js'
 import { CLI } from '../engine/cli.js'
 import { HostCLI } from '../engine/hostcli.js'
-import { pingWorks, routeCovers, isSaved, observedPing, observedShow,
+import { pingWorks, isSaved, observedPing, observedShow,
   hasStaticRoute, routeVia } from '../engine/grader.js'
 
 function ip(dev, name, addr, mask) {
@@ -84,28 +84,32 @@ export const staticRouting = {
       text: 'R1: add a default route toward R2 (10.1.12.2)',
       hints: ['R1 only knows its two connected networks. Give it a default route to send everything else to R2.',
         'R1(config)# ip route 0.0.0.0 0.0.0.0 10.1.12.2'],
-      check: (net) => routeCovers(net, 'R1', '192.168.3.10', 'S'),
+      // Must be a real default (3.3.a). routeCovers() alone also accepted a
+      // specific route to the far LAN, which is a different blueprint item.
+      check: (net) => hasStaticRoute(net, 'R1', '0.0.0.0', '0.0.0.0', { nextHop: '10.1.12.2' }),
     },
     {
       id: 'r2-to-lan1',
       text: 'R2: add a route to the PC1 LAN (192.168.1.0/24) via R1',
       hints: ['R2 sits in the middle — it needs an explicit route to each LAN.',
         'R2(config)# ip route 192.168.1.0 255.255.255.0 10.1.12.1'],
-      check: (net) => routeCovers(net, 'R2', '192.168.1.10', 'S'),
+      // A specific network route (3.3.b) — a default that happens to cover the
+      // LAN is not what this task asked for.
+      check: (net) => hasStaticRoute(net, 'R2', '192.168.1.0', '255.255.255.0', { nextHop: '10.1.12.1' }),
     },
     {
       id: 'r2-to-lan3',
       text: 'R2: add a route to the PC3 LAN (192.168.3.0/24) via R3',
       hints: ['Same idea, for the far LAN, via R3.',
         'R2(config)# ip route 192.168.3.0 255.255.255.0 10.1.23.2'],
-      check: (net) => routeCovers(net, 'R2', '192.168.3.10', 'S'),
+      check: (net) => hasStaticRoute(net, 'R2', '192.168.3.0', '255.255.255.0', { nextHop: '10.1.23.2' }),
     },
     {
       id: 'r3-default',
       text: 'R3: add a default route toward R2 (10.1.23.1)',
       hints: ['Mirror of R1 — a default route pointing back at R2.',
         'R3(config)# ip route 0.0.0.0 0.0.0.0 10.1.23.1'],
-      check: (net) => routeCovers(net, 'R3', '192.168.1.10', 'S'),
+      check: (net) => hasStaticRoute(net, 'R3', '0.0.0.0', '0.0.0.0', { nextHop: '10.1.23.1' }),
     },
     {
       id: 'host-route',

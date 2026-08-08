@@ -52,14 +52,14 @@ export const ipv6Addressing = {
       text: 'Address R1 g0/0 as 2001:DB8:ACAD:1::1/64',
       hints: ['Configure the global unicast address with its /64 prefix length.',
         'interface gi0/0 → ipv6 address 2001:DB8:ACAD:1::1/64'],
-      check: (net) => ifaceHasIpv6(net, 'R1', 'gi0/0', '2001:DB8:ACAD:1::1'),
+      check: (net) => ifaceHasIpv6(net, 'R1', 'gi0/0', '2001:DB8:ACAD:1::1/64'),
     },
     {
       id: 'r2-addr',
       text: 'Address R2 g0/0 as 2001:DB8:ACAD:1::2/64',
       hints: ['Same /64 prefix, host portion ::2.',
         'interface gi0/0 → ipv6 address 2001:DB8:ACAD:1::2/64'],
-      check: (net) => ifaceHasIpv6(net, 'R2', 'gi0/0', '2001:DB8:ACAD:1::2'),
+      check: (net) => ifaceHasIpv6(net, 'R2', 'gi0/0', '2001:DB8:ACAD:1::2/64'),
     },
     {
       id: 'intf-check',
@@ -67,7 +67,7 @@ export const ipv6Addressing = {
       hints: ['Confirm the prefix landed on the interface (and note the link-local alongside it).',
         'R1# show ipv6 interface brief'],
       check: (net) =>
-        ifaceHasIpv6(net, 'R1', 'gi0/0', '2001:DB8:ACAD:1::1') &&
+        ifaceHasIpv6(net, 'R1', 'gi0/0', '2001:DB8:ACAD:1::1/64') &&
         observedShow(net, 'R1', 'ipv6 interface brief'),
     },
     {

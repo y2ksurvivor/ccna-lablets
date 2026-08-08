@@ -250,3 +250,64 @@ describe('all lablets', () => {
     expect(uncovered).toEqual([])
   })
 })
+
+// A check is "loose" when a configuration the task did not ask for still turns
+// it green. Each case here is one that used to pass and must not.
+describe('checks reject configurations the task did not ask for', () => {
+  const build = (id, plan) => {
+    const sc = getScenario(id)
+    const sim = sc.build()
+    for (const [dev, cmds] of Object.entries(plan)) {
+      for (const c of cmds) sim.consoles[dev].execute(c)
+    }
+    return grade(sc, sim.net)
+  }
+  const passed = (results, id) => results.find(t => t.id === id).pass
+
+  const bundle = (mode) => ({
+    SW1: ['enable', 'conf t', 'interface gi0/1', `channel-group 1 mode ${mode}`, 'exit',
+      'interface gi0/2', `channel-group 1 mode ${mode}`, 'end'],
+  })
+
+  it.each(['active', 'passive'])('EtherChannel accepts LACP mode %s', (mode) => {
+    expect(passed(build('etherchannel', bundle(mode)), 'sw1-bundle')).toBe(true)
+  })
+
+  it('EtherChannel rejects mode on — static bundling is not LACP', () => {
+    expect(passed(build('etherchannel', bundle('on')), 'sw1-bundle')).toBe(false)
+  })
+
+  it('a default route is required where the task says default (3.3.a)', () => {
+    const specific = build('static-routing',
+      { R1: ['enable', 'conf t', 'ip route 192.168.3.0 255.255.255.0 10.1.12.2', 'end'] })
+    expect(passed(specific, 'r1-default')).toBe(false)
+    const real = build('static-routing',
+      { R1: ['enable', 'conf t', 'ip route 0.0.0.0 0.0.0.0 10.1.12.2', 'end'] })
+    expect(passed(real, 'r1-default')).toBe(true)
+  })
+
+  it('a network route is required where the task says network (3.3.b)', () => {
+    const dflt = build('static-routing',
+      { R2: ['enable', 'conf t', 'ip route 0.0.0.0 0.0.0.0 10.1.12.1', 'end'] })
+    expect(passed(dflt, 'r2-to-lan1')).toBe(false)
+    expect(passed(dflt, 'r2-to-lan3')).toBe(false)
+  })
+
+  it('the IPv6 prefix length must match (1.8 is addressing AND prefix)', () => {
+    const v6 = (len) => build('ipv6-addressing', {
+      R1: ['enable', 'conf t', 'interface gi0/0',
+        `ipv6 address 2001:DB8:ACAD:1::1/${len}`, 'no shutdown', 'end'],
+    })
+    expect(passed(v6(64), 'r1-addr')).toBe(true)
+    expect(passed(v6(48), 'r1-addr')).toBe(false)
+  })
+
+  it('the DHCP pool mask must match', () => {
+    const pool = (mask) => build('dhcp', {
+      R2: ['enable', 'conf t', 'ip dhcp pool LAN1',
+        `network 192.168.1.0 ${mask}`, 'default-router 192.168.1.1', 'end'],
+    })
+    expect(passed(pool('255.255.255.0'), 'pool')).toBe(true)
+    expect(passed(pool('255.255.0.0'), 'pool')).toBe(false)
+  })
+})

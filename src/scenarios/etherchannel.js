@@ -55,14 +55,18 @@ export const etherchannel = {
       text: 'On SW1, add Gi0/1 and Gi0/2 to channel-group 1 (LACP)',
       hints: ['Put BOTH links into the same channel-group number, using an LACP mode.',
         'interface gi0/1 → channel-group 1 mode active   (repeat for gi0/2)'],
-      check: (net) => portInChannel(net, 'SW1', 'gi0/1', 1) && portInChannel(net, 'SW1', 'gi0/2', 1),
+      check: (net) =>
+        portInChannel(net, 'SW1', 'gi0/1', 1, { protocol: 'lacp' }) &&
+        portInChannel(net, 'SW1', 'gi0/2', 1, { protocol: 'lacp' }),
     },
     {
       id: 'sw2-bundle',
       text: 'On SW2, add Gi0/1 and Gi0/2 to channel-group 1 (LACP)',
       hints: ['The far end must negotiate too — repeat the bundle on SW2.',
         'interface gi0/1 → channel-group 1 mode active   (repeat for gi0/2)'],
-      check: (net) => portInChannel(net, 'SW2', 'gi0/1', 1) && portInChannel(net, 'SW2', 'gi0/2', 1),
+      check: (net) =>
+        portInChannel(net, 'SW2', 'gi0/1', 1, { protocol: 'lacp' }) &&
+        portInChannel(net, 'SW2', 'gi0/2', 1, { protocol: 'lacp' }),
     },
     {
       id: 'channel-up',
