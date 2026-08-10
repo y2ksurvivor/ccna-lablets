@@ -157,6 +157,74 @@ describe('access ports must be explicitly configured', () => {
   })
 })
 
+describe('fixed-arity commands reject trailing tokens', () => {
+  // "switchport mode trunk native vlan 99" is two commands typed as one. Running
+  // only the first half silently leaves the learner certain they configured a
+  // native VLAN they never set.
+  const iface = (id, dev, setup) => {
+    const sim = getScenario(id).build()
+    const cli = sim.consoles[dev]
+    for (const c of setup) cli.execute(c)
+    return { cli, sim }
+  }
+
+  const rejected = (out) => out.length === 2 &&
+    out[1] === "% Invalid input detected at '^' marker."
+
+  it('switchport mode trunk native vlan 99 is rejected and changes nothing', () => {
+    const { cli, sim } = iface('vlan-basics', 'SW1',
+      ['enable', 'conf t', 'interface gi0/24'])
+    expect(rejected(cli.execute('switchport mode trunk native vlan 99'))).toBe(true)
+    const ifc = sim.net.devices.SW1.interfaces['GigabitEthernet0/24']
+    expect(ifc.modeExplicit).toBe(false)
+    expect(ifc.trunkNativeVlan).toBe(1)
+  })
+
+  it('switchport mode access vlan 10 is rejected and changes nothing', () => {
+    const { cli, sim } = iface('vlan-basics', 'SW1',
+      ['enable', 'conf t', 'interface gi0/1'])
+    expect(rejected(cli.execute('switchport mode access vlan 10'))).toBe(true)
+    const ifc = sim.net.devices.SW1.interfaces['GigabitEthernet0/1']
+    expect(ifc.modeExplicit).toBe(false)
+    expect(ifc.accessVlan).toBe(1)
+  })
+
+  it.each([
+    ['vlan-basics', 'SW1', ['enable', 'conf t', 'interface gi0/1'], 'switchport access vlan 10 bogus'],
+    ['vlan-basics', 'SW1', ['enable', 'conf t', 'interface gi0/24'], 'switchport trunk native vlan 99 bogus'],
+    ['l2-security', 'SW1', ['enable', 'conf t', 'interface gi0/1'], 'switchport port-security maximum 1 bogus'],
+    ['ipv4-addressing', 'R1', ['enable', 'conf t', 'interface gi0/0'], 'ip address 10.0.0.1 255.255.255.0 bogus'],
+    ['etherchannel', 'SW1', ['enable', 'conf t', 'interface gi0/1'], 'channel-group 1 mode active bogus'],
+    ['dhcp', 'R1', ['enable', 'conf t', 'interface gi0/0'], 'ip helper-address 10.0.12.2 bogus'],
+    ['ssh', 'R1', ['enable', 'conf t'], 'ip domain-name lab.local bogus'],
+    ['vlan-basics', 'SW1', ['enable', 'conf t'], 'vlan 10 bogus'],
+    ['static-routing', 'R1', ['enable', 'conf t'], 'ip route 0.0.0.0 0.0.0.0 10.1.12.2 200 bogus'],
+  ])('%s: %s', (id, dev, setup, cmd) => {
+    const { cli } = iface(id, dev, setup)
+    expect(rejected(cli.execute(cmd))).toBe(true)
+  })
+
+  it.each([
+    ['switchport mode trunk'],
+    ['switchport trunk native vlan 99'],
+    ['switchport trunk allowed vlan 10,20'],
+    ['switchport mode access'],
+    ['switchport access vlan 10'],
+    ['switchport port-security'],
+    ['switchport port-security maximum 2'],
+    ['switchport port-security mac-address sticky'],
+    ['switchport port-security violation restrict'],
+  ])('the real command still works: %s', (cmd) => {
+    const { cli } = iface('l2-security', 'SW1', ['enable', 'conf t', 'interface gi0/1'])
+    expect(cli.execute(cmd)).toEqual([])
+  })
+
+  it('description stays free-form', () => {
+    const { cli } = iface('ipv4-addressing', 'R1', ['enable', 'conf t', 'interface gi0/0'])
+    expect(cli.execute('description uplink to the SALES vlan')).toEqual([])
+  })
+})
+
 describe('interface counters', () => {
   const routed = () => {
     const sim = getScenario('static-routing').build()

@@ -282,6 +282,7 @@ const COMMANDS = {
       argHelp: () => [{ name: '<1-4094>', help: 'ISL VLAN IDs 1-4094' }],
       run: (cli, a) => {
         if (cli.dev.kind !== 'switch') return cli.invalid(a[0])
+        { const bad = tooMany(cli, a, 1); if (bad) return bad }
         const id = parseInt(a[0], 10)
         if (!id || id < 1 || id > 4094) return ['% Invalid VLAN']
         if (!cli.dev.vlans[id]) cli.dev.vlans[id] = { id, name: `VLAN${String(id).padStart(4, '0')}` }
@@ -460,9 +461,16 @@ const COMMANDS = {
       },
       run: (cli, a) => {
         if (a[0] === 'address') {
-          if (a[1] === 'dhcp') { cli.ctx.iface.addressMode = 'dhcp'; cli.ctx.iface.ip = null; cli.ctx.iface.mask = null; return [] }
+          if (a[1] === 'dhcp') {
+            const bad = tooMany(cli, a, 2)
+            if (bad) return bad
+            cli.ctx.iface.addressMode = 'dhcp'; cli.ctx.iface.ip = null; cli.ctx.iface.mask = null
+            return []
+          }
           const [ip, mask] = [a[1], a[2]]
           if (!ip || !mask) return ['% Incomplete command.']
+          const bad = tooMany(cli, a, 3)
+          if (bad) return bad
           cli.ctx.iface.ip = ip
           cli.ctx.iface.mask = mask
           cli.ctx.iface.addressMode = 'static'
@@ -475,6 +483,7 @@ const COMMANDS = {
         }
         if (a[0] === 'helper-address') {
           if (!a[1]) return ['% Incomplete command.']
+          { const bad = tooMany(cli, a, 2); if (bad) return bad }
           cli.ctx.iface.helperAddress = a[1]
           return []
         }
@@ -800,6 +809,7 @@ function channelGroupCmd(cli, a) {
   if ((a[1] || '') !== 'mode' && !'mode'.startsWith(a[1] || 'x')) return ['% Incomplete command.']
   const mode = a[2]
   if (!['active', 'passive', 'on'].includes(mode)) return cli.invalid(mode)
+  { const bad = tooMany(cli, a, 3); if (bad) return bad }
   const ifc = cli.ctx.iface
   ifc.channelGroup = { id, mode }
   if (!cli.dev.portChannels[id]) cli.dev.portChannels[id] = { id, members: [] }
@@ -808,16 +818,37 @@ function channelGroupCmd(cli, a) {
   return [`Creating a port-channel interface Port-channel ${id}`]
 }
 
+// Trailing tokens past position `n` are a parse error, not something to drop.
+// Only for commands with fixed arity — `description`, `transport input <list>`
+// and `access-list ...` legitimately take a variable tail.
+function tooMany(cli, a, n) {
+  return a.length > n ? cli.invalid(a[n]) : null
+}
+
 function switchportCmd(cli, a) {
   const ifc = cli.ctx.iface
+  // Each form below consumes a fixed number of tokens. Anything after that is a
+  // parse error in IOS, not something to quietly drop — "switchport mode trunk
+  // native vlan 99" is two commands run together, and silently honouring only
+  // the first half leaves the learner sure they configured something they did
+  // not. `extra(n)` returns the caret error when tokens remain past position n.
+  const extra = (n) => (a.length > n ? cli.invalid(a[n]) : null)
+
   if (a[0] === 'mode') {
-    if (a[1] === 'access') { ifc.mode = 'access'; ifc.modeExplicit = true; return [] }
-    if (a[1] === 'trunk') { ifc.mode = 'trunk'; ifc.modeExplicit = true; return [] }
-    return ['% Incomplete command.']
+    if (a[1] === 'access' || a[1] === 'trunk') {
+      const bad = extra(2)
+      if (bad) return bad
+      ifc.mode = a[1]
+      ifc.modeExplicit = true
+      return []
+    }
+    return a[1] ? cli.invalid(a[1]) : ['% Incomplete command.']
   }
   if (a[0] === 'access' && a[1] === 'vlan') {
     const id = parseInt(a[2], 10)
     if (!id) return ['% Incomplete command.']
+    const bad = extra(3)
+    if (bad) return bad
     ifc.accessVlan = id
     return []
   }
@@ -825,25 +856,48 @@ function switchportCmd(cli, a) {
     if (a[1] === 'native' && a[2] === 'vlan') {
       const id = parseInt(a[3], 10)
       if (!id) return ['% Incomplete command.']
+      const bad = extra(4)
+      if (bad) return bad
       ifc.trunkNativeVlan = id
       return []
     }
     if (a[1] === 'allowed' && a[2] === 'vlan') {
       const list = a[3]
       if (!list) return ['% Incomplete command.']
+      const bad = extra(4)
+      if (bad) return bad
       ifc.trunkAllowed = list.split(',').map(s => parseInt(s, 10)).filter(Boolean)
       return []
     }
-    return ['% Incomplete command.']
+    return a[1] ? cli.invalid(a[1]) : ['% Incomplete command.']
   }
   if (a[0] === 'port-security') {
     if (!ifc.portSecurity) ifc.portSecurity = { enabled: false, maximum: 1, violation: 'shutdown', sticky: false }
     const ps = ifc.portSecurity
     if (a.length === 1) { ps.enabled = true; return [] }
-    if (a[1] === 'maximum') { const n = parseInt(a[2], 10); if (!n) return ['% Incomplete command.']; ps.maximum = n; return [] }
-    if (a[1] === 'violation') { if (!['shutdown', 'restrict', 'protect'].includes(a[2])) return cli.invalid(a[2]); ps.violation = a[2]; return [] }
-    if (a[1] === 'mac-address') { if ('sticky'.startsWith(a[2] || 'x')) { ps.sticky = true; return [] } return [] }
-    return ['% Incomplete command.']
+    if (a[1] === 'maximum') {
+      const n = parseInt(a[2], 10)
+      if (!n) return ['% Incomplete command.']
+      const bad = extra(3)
+      if (bad) return bad
+      ps.maximum = n
+      return []
+    }
+    if (a[1] === 'violation') {
+      if (!['shutdown', 'restrict', 'protect'].includes(a[2])) return cli.invalid(a[2])
+      const bad = extra(3)
+      if (bad) return bad
+      ps.violation = a[2]
+      return []
+    }
+    if (a[1] === 'mac-address') {
+      if (!'sticky'.startsWith(a[2] || 'x') || !a[2]) return a[2] ? cli.invalid(a[2]) : ['% Incomplete command.']
+      const bad = extra(3)
+      if (bad) return bad
+      ps.sticky = true
+      return []
+    }
+    return cli.invalid(a[1])
   }
   return cli.invalid(a[0])
 }
@@ -873,13 +927,21 @@ function ipConfigCmd(cli, a) {
   if (a[0] === 'route') {
     const [prefix, mask, nh] = [a[1], a[2], a[3]]
     if (!prefix || !mask || !nh) return ['% Incomplete command.']
+    const bad = tooMany(cli, a, 5)
+    if (bad) return bad
     const ad = a[4] ? parseInt(a[4], 10) : 1
     cli.dev.routes = cli.dev.routes.filter(r => !(r.prefix === prefix && r.mask === mask && r.nextHop === nh))
     cli.dev.routes.push({ proto: 'S', prefix, mask, nextHop: nh, ad, metric: 0 })
     return []
   }
   // ip domain-name X  /  ip domain name X
-  if (a[0] === 'domain-name') { cli.dev.domainName = a[1] || null; return a[1] ? [] : ['% Incomplete command.'] }
+  if (a[0] === 'domain-name') {
+    if (!a[1]) return ['% Incomplete command.']
+    const bad = tooMany(cli, a, 2)
+    if (bad) return bad
+    cli.dev.domainName = a[1]
+    return []
+  }
   if (a[0] === 'domain' && a[1] === 'name') { cli.dev.domainName = a[2] || null; return a[2] ? [] : ['% Incomplete command.'] }
   if (a[0] === 'ssh') return [] // ip ssh version 2 — accepted
   // ip dhcp ...
@@ -966,6 +1028,7 @@ function ipNatCmd(cli, a) {
     if (a[2] === 'static') {
       const [local, global] = [a[3], a[4]]
       if (!local || !global) return ['% Incomplete command.']
+      { const bad = tooMany(cli, a, 5); if (bad) return bad }
       cli.dev.nat.statics.push({ insideLocal: local, insideGlobal: global })
       return []
     }
