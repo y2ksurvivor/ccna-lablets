@@ -112,6 +112,12 @@ export class CLI {
     if (cmd.noArgs && tokens.length > 1) {
       return this.caretError(tokens[1])
     }
+    // Same idea for commands that take a fixed maximum number of arguments.
+    // Commands with several forms of differing length check inside their
+    // handler instead (see tooMany).
+    if (cmd.maxArgs != null && tokens.length - 1 > cmd.maxArgs) {
+      return this.caretError(tokens[cmd.maxArgs + 1])
+    }
     return cmd.run(this, tokens.slice(1), tokens)
   }
 
@@ -225,7 +231,7 @@ const COMMANDS = {
     },
     show: { help: 'Show running system information', argHelp: showArgHelp, run: (cli, a) => showCmd(cli, a) },
     ping: { help: 'Send echo messages', argHelp: pingArgHelp, run: (cli, a) => pingCmd(cli, a) },
-    write: {
+    write: { maxArgs: 1,
       help: 'Write running configuration to memory',
       argHelp: () => [{ name: 'memory', help: 'Write to NV memory' }, { name: 'erase', help: 'Erase NV memory' }],
       run: (cli, a) => {
@@ -239,7 +245,7 @@ const COMMANDS = {
       help: 'Save running configuration (alias for write memory)',
       run: (cli) => { saveConfig(cli); return ['Building configuration...', '[OK]'] },
     },
-    copy: {
+    copy: { maxArgs: 3,
       help: 'Copy from one file to another',
       argHelp: (cli, a) => a.length === 0
         ? [{ name: 'running-config', help: 'Copy from current system configuration' }]
@@ -257,7 +263,7 @@ const COMMANDS = {
   },
 
   config: {
-    hostname: {
+    hostname: { maxArgs: 1,
       help: 'Set system network name',
       argHelp: () => [{ name: 'WORD', help: 'This system\'s network name' }],
       run: (cli, a) => {
@@ -266,7 +272,7 @@ const COMMANDS = {
         return []
       },
     },
-    interface: {
+    interface: { maxArgs: 1,
       help: 'Select an interface to configure',
       argHelp: interfaceArgHelp,
       run: (cli, a) => {
@@ -291,7 +297,7 @@ const COMMANDS = {
         return []
       },
     },
-    'enable': {
+    'enable': { maxArgs: 2,
       help: 'Modify enable password parameters',
       argHelp: (cli, a) => a.length === 0
         ? [{ name: 'secret', help: 'Assign the privileged level secret' }, { name: 'password', help: 'Assign the privileged level password' }]
@@ -302,7 +308,7 @@ const COMMANDS = {
         return ['% Incomplete command.']
       },
     },
-    'service': {
+    'service': { maxArgs: 1,
       help: 'Modify use of network based services',
       argHelp: () => [{ name: 'password-encryption', help: 'Encrypt system passwords' }],
       run: (cli, a) => {
@@ -310,7 +316,7 @@ const COMMANDS = {
         return ['% Incomplete command.']
       },
     },
-    'cdp': {
+    'cdp': { maxArgs: 1,
       help: 'Global CDP configuration',
       argHelp: () => [{ name: 'run', help: 'Enable CDP' }],
       run: (cli, a) => {
@@ -318,7 +324,7 @@ const COMMANDS = {
         return ['% Incomplete command.']
       },
     },
-    'lldp': {
+    'lldp': { maxArgs: 1,
       help: 'Global LLDP configuration',
       argHelp: () => [{ name: 'run', help: 'Enable LLDP' }],
       run: (cli, a) => {
@@ -333,7 +339,10 @@ const COMMANDS = {
           { name: 'route', help: 'Configure static routes' }]
         : [{ name: 'X:X:X:X::X/<0-128>', help: 'IPv6 prefix' }],
       run: (cli, a) => {
-        if ('unicast-routing'.startsWith(a[0] || 'x') && a[0]) { cli.dev.ipv6Routing = true; return [] }
+        if ('unicast-routing'.startsWith(a[0] || 'x') && a[0]) {
+          const bad = tooMany(cli, a, 1); if (bad) return bad
+          cli.dev.ipv6Routing = true; return []
+        }
         if (a[0] === 'route') return ipv6RouteCmd(cli, a.slice(1))
         return ['% Incomplete command.']
       },
@@ -362,7 +371,7 @@ const COMMANDS = {
       },
       run: (cli, a) => ipConfigCmd(cli, a),
     },
-    'router': {
+    'router': { maxArgs: 2,
       help: 'Enable a routing process',
       argHelp: (cli, a) => a.length === 0
         ? [{ name: 'ospf', help: 'Open Shortest Path First (OSPF)' }]
@@ -377,7 +386,7 @@ const COMMANDS = {
         return []
       },
     },
-    'crypto': {
+    'crypto': { maxArgs: 5,
       help: 'Encryption module',
       argHelp: (cli, a) => {
         if (a.length === 0) return [{ name: 'key', help: 'Long term key operations' }]
@@ -387,7 +396,7 @@ const COMMANDS = {
       },
       run: (cli, a) => cryptoCmd(cli, a),
     },
-    'username': {
+    'username': { maxArgs: 3,
       help: 'Establish user name authentication',
       argHelp: (cli, a) => a.length === 0
         ? [{ name: 'WORD', help: 'User name' }]
@@ -411,13 +420,16 @@ const COMMANDS = {
         : [{ name: '<0-15>', help: 'First line number' }],
       run: (cli, a) => {
         const type = a[0]
+        // "line vty 0 4" takes a range; "line console 0" a single number.
+        const bad = tooMany(cli, a, 'vty'.startsWith(type || 'x') ? 3 : 2)
+        if (bad) return bad
         if ('vty'.startsWith(type || 'x')) { cli.ctx.line = ensureLine(cli.dev, 'vty'); cli.mode = 'line' }
         else if ('console'.startsWith(type || 'x')) { cli.ctx.line = ensureLine(cli.dev, 'console'); cli.mode = 'line' }
         else return cli.invalid(type)
         return []
       },
     },
-    'ntp': {
+    'ntp': { maxArgs: 2,
       help: 'Configure NTP',
       argHelp: (cli, a) => a.length === 0
         ? [{ name: 'master', help: 'Act as NTP master clock' }, { name: 'server', help: 'Configure NTP server' }]
@@ -477,8 +489,12 @@ const COMMANDS = {
           return []
         }
         if (a[0] === 'nat') {
-          if (a[1] === 'inside') { cli.ctx.iface.natRole = 'inside'; return [] }
-          if (a[1] === 'outside') { cli.ctx.iface.natRole = 'outside'; return [] }
+          if (a[1] === 'inside' || a[1] === 'outside') {
+            const bad = tooMany(cli, a, 2)
+            if (bad) return bad
+            cli.ctx.iface.natRole = a[1]
+            return []
+          }
           return ['% Incomplete command.']
         }
         if (a[0] === 'helper-address') {
@@ -490,13 +506,21 @@ const COMMANDS = {
         if (a[0] === 'access-group') {
           const [aclId, dir] = [a[1], a[2]]
           if (!aclId || !dir) return ['% Incomplete command.']
+          const bad = tooMany(cli, a, 3)
+          if (bad) return bad
           if (dir === 'in') cli.ctx.iface.accessGroupIn = aclId
           else if (dir === 'out') cli.ctx.iface.accessGroupOut = aclId
           else return cli.invalid(dir)
           return []
         }
-        if (a[0] === 'dhcp' && a[1] === 'snooping' && 'trust'.startsWith(a[2] || 'x')) { cli.ctx.iface.dhcpSnoopTrust = true; return [] }
-        if (a[0] === 'arp' && a[1] === 'inspection' && 'trust'.startsWith(a[2] || 'x')) { cli.ctx.iface.arpInspectTrust = true; return [] }
+        if (a[0] === 'dhcp' && a[1] === 'snooping' && 'trust'.startsWith(a[2] || 'x') && a[2]) {
+          const bad = tooMany(cli, a, 3); if (bad) return bad
+          cli.ctx.iface.dhcpSnoopTrust = true; return []
+        }
+        if (a[0] === 'arp' && a[1] === 'inspection' && 'trust'.startsWith(a[2] || 'x') && a[2]) {
+          const bad = tooMany(cli, a, 3); if (bad) return bad
+          cli.ctx.iface.arpInspectTrust = true; return []
+        }
         return cli.invalid(a[0])
       },
     },
@@ -523,6 +547,7 @@ const COMMANDS = {
           if (!spec) return ['% Incomplete command.']
           if ((a[2] || '').toLowerCase() === 'link-local') { return [] } // accepted, not tracked
           if (!spec.includes('/')) return ['% Incomplete command.']
+          { const bad = tooMany(cli, a, 2); if (bad) return bad }
           const list = cli.ctx.iface.ipv6
           if (!list.includes(spec)) list.push(spec)
           return []
@@ -530,12 +555,12 @@ const COMMANDS = {
         return cli.invalid(a[0])
       },
     },
-    'cdp': {
+    'cdp': { maxArgs: 1,
       help: 'CDP interface subcommands',
       argHelp: () => [{ name: 'enable', help: 'Enable CDP on interface' }],
       run: (cli, a) => { if ('enable'.startsWith(a[0] || 'x')) { cli.ctx.iface.cdpEnabled = true; return [] } return ['% Incomplete command.'] },
     },
-    'lldp': {
+    'lldp': { maxArgs: 1,
       help: 'LLDP interface subcommands',
       argHelp: () => [{ name: 'transmit', help: 'Enable LLDP transmit' }, { name: 'receive', help: 'Enable LLDP receive' }],
       run: (cli, a) => {
@@ -563,7 +588,7 @@ const COMMANDS = {
   },
 
   vlan: {
-    name: { help: 'Set VLAN name', run: (cli, a) => { cli.ctx.vlan.name = a[0] || cli.ctx.vlan.name; return [] } },
+    name: { help: 'Set VLAN name', maxArgs: 1, run: (cli, a) => { cli.ctx.vlan.name = a[0] || cli.ctx.vlan.name; return [] } },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
     exit: { help: 'Exit VLAN config', noArgs: true, run: (cli) => { cli.mode = 'config'; return [] } },
     end: { help: 'Return to privileged EXEC', noArgs: true, run: (cli) => { cli.mode = 'enable'; return [] } },
@@ -576,12 +601,20 @@ const COMMANDS = {
         ? [{ name: 'input', help: 'Define which protocols to use when connecting to the terminal server' }, { name: 'output', help: 'Define which protocols to use for outgoing connections' }]
         : [{ name: 'ssh', help: 'TCP/IP SSH protocol' }, { name: 'telnet', help: 'TCP/IP Telnet protocol' }, { name: 'all', help: 'All protocols' }, { name: 'none', help: 'No protocols' }],
       run: (cli, a) => {
-        if (a[0] === 'input') { cli.ctx.line.transportInput = a.slice(1); return [] }
-        if (a[0] === 'output') { cli.ctx.line.transportOutput = a.slice(1); return [] }
+        const PROTOCOLS = ['ssh', 'telnet', 'all', 'none']
+        if (a[0] === 'input' || a[0] === 'output') {
+          const list = a.slice(1)
+          if (!list.length) return ['% Incomplete command.']
+          const junk = list.find(t => !PROTOCOLS.includes(t))
+          if (junk) return cli.invalid(junk)
+          if (a[0] === 'input') cli.ctx.line.transportInput = list
+          else cli.ctx.line.transportOutput = list
+          return []
+        }
         return ['% Incomplete command.']
       },
     },
-    'login': {
+    'login': { maxArgs: 1,
       help: 'Enable password checking',
       argHelp: () => [{ name: 'local', help: 'Local password checking' }, { name: '<cr>', help: '' }],
       run: (cli, a) => { cli.ctx.line.login = (a[0] && 'local'.startsWith(a[0])) ? 'local' : 'password'; return [] },
@@ -593,20 +626,20 @@ const COMMANDS = {
   },
 
   dhcp: {
-    'network': {
+    'network': { maxArgs: 2,
       help: 'Network number and mask',
       argHelp: (cli, a) => a.length === 0 ? [{ name: 'A.B.C.D', help: 'Network number' }] : [{ name: 'A.B.C.D', help: 'Network mask' }],
       run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.network = a[0]; cli.ctx.dhcpPool.mask = a[1] || '255.255.255.0'; return [] },
     },
-    'default-router': { help: 'Default routers', run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.defaultRouter = a[0]; return [] } },
-    'dns-server': { help: 'DNS servers', run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.dnsServer = a[0]; return [] } },
+    'default-router': { help: 'Default routers', maxArgs: 1, run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.defaultRouter = a[0]; return [] } },
+    'dns-server': { help: 'DNS servers', maxArgs: 1, run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.ctx.dhcpPool.dnsServer = a[0]; return [] } },
     'no': { help: 'Negate a command', run: (cli, a) => negate(cli, a) },
     exit: { help: 'Exit DHCP pool config', noArgs: true, run: (cli) => { cli.mode = 'config'; return [] } },
     end: { help: 'Return to privileged EXEC', noArgs: true, run: (cli) => { cli.mode = 'enable'; return [] } },
   },
 
   router: {
-    network: {
+    network: { maxArgs: 4,
       help: 'Enable routing on an IP network',
       argHelp: (cli, a) => {
         if (a.length === 0) return [{ name: 'A.B.C.D', help: 'Network number' }]
@@ -617,7 +650,7 @@ const COMMANDS = {
       },
       run: (cli, a) => networkCmd(cli, a),
     },
-    'router-id': {
+    'router-id': { maxArgs: 1,
       help: 'Configure router identifier',
       argHelp: () => [{ name: 'A.B.C.D', help: 'OSPF router-id in IP address format' }],
       run: (cli, a) => { if (!a[0]) return ['% Incomplete command.']; cli.dev.ospf.routerId = a[0]; return [] },
@@ -776,6 +809,11 @@ function negate(cli, a) {
     if (name === 'default-router') { cli.ctx.dhcpPool.defaultRouter = null; return [] }
     if (name === 'dns-server') { cli.ctx.dhcpPool.dnsServer = null; return [] }
   }
+  // Trailing tokens are as invalid after `no` as before it.
+  if (name === 'shutdown' || name === 'description') {
+    const bad = tooMany(cli, a, 1)
+    if (bad) return bad
+  }
   if (cli.mode === 'iface') {
     if (name === 'shutdown') {
       const i = cli.ctx.iface
@@ -913,6 +951,7 @@ function ipv6RouteCmd(cli, a) {
   if (nhBig === null) return cli.invalid(nh)
   const ad = a[2] ? parseInt(a[2], 10) : 1
   if (Number.isNaN(ad)) return cli.invalid(a[2])
+  { const bad = tooMany(cli, a, 3); if (bad) return bad }
   const prefix = bigToIpv6(netV6(p.addr, p.len))
   cli.dev.ipv6Routes = cli.dev.ipv6Routes
     .filter(r => !(r.prefix === prefix && r.len === p.len && r.nextHop === nh))
@@ -929,6 +968,8 @@ function ipConfigCmd(cli, a) {
     if (!prefix || !mask || !nh) return ['% Incomplete command.']
     const bad = tooMany(cli, a, 5)
     if (bad) return bad
+    // The optional 5th token is the administrative distance — it must be one.
+    if (a[4] != null && !/^\d+$/.test(a[4])) return cli.invalid(a[4])
     const ad = a[4] ? parseInt(a[4], 10) : 1
     cli.dev.routes = cli.dev.routes.filter(r => !(r.prefix === prefix && r.mask === mask && r.nextHop === nh))
     cli.dev.routes.push({ proto: 'S', prefix, mask, nextHop: nh, ad, metric: 0 })
@@ -949,6 +990,7 @@ function ipConfigCmd(cli, a) {
     if (a[1] === 'pool') {
       const name = a[2]
       if (!name) return ['% Incomplete command.']
+      { const bad = tooMany(cli, a, 3); if (bad) return bad }
       if (!cli.dev.dhcpPools[name]) cli.dev.dhcpPools[name] = { name, network: null, mask: null, defaultRouter: null, dnsServer: null }
       cli.ctx.dhcpPool = cli.dev.dhcpPools[name]
       cli.mode = 'dhcp'
@@ -956,14 +998,25 @@ function ipConfigCmd(cli, a) {
     }
     if (a[1] === 'excluded-address') {
       if (!a[2]) return ['% Incomplete command.']
+      const bad = tooMany(cli, a, 4)
+      if (bad) return bad
+      // The optional second address is a range end — it has to be an address.
+      const isIp = (t) => /^\d{1,3}(\.\d{1,3}){3}$/.test(t)
+      if (!isIp(a[2])) return cli.invalid(a[2])
+      if (a[3] && !isIp(a[3])) return cli.invalid(a[3])
       cli.dev.dhcpExcluded.push(a[2])
-      if (a[3]) cli.dev.dhcpExcluded.push(a[3]) // range end (simplified)
+      if (a[3]) cli.dev.dhcpExcluded.push(a[3])
       return []
     }
     if (a[1] === 'snooping') {
       if (!a[2]) { cli.dev.dhcpSnooping.enabled = true; return [] }
-      if (a[2] === 'vlan') { addVlanList(cli.dev.dhcpSnooping.vlans, a[3]); return [] }
-      return []
+      if (a[2] === 'vlan') {
+        const bad = tooMany(cli, a, 4)
+        if (bad) return bad
+        addVlanList(cli.dev.dhcpSnooping.vlans, a[3])
+        return []
+      }
+      return cli.invalid(a[2])
     }
     return ['% Incomplete command.']
   }
@@ -971,7 +1024,10 @@ function ipConfigCmd(cli, a) {
   if (a[0] === 'nat') return ipNatCmd(cli, a.slice(1))
   // ip arp inspection vlan <list>
   if (a[0] === 'arp' && a[1] === 'inspection' && a[2] === 'vlan') {
-    addVlanList(cli.dev.arpInspection.vlans, a[3]); return []
+    const bad = tooMany(cli, a, 4)
+    if (bad) return bad
+    addVlanList(cli.dev.arpInspection.vlans, a[3])
+    return []
   }
   return cli.invalid(a[0])
 }
@@ -1018,6 +1074,8 @@ function ipNatCmd(cli, a) {
   if (a[0] === 'pool') {
     const [name, start, end] = [a[1], a[2], a[3]]
     if (!name || !start || !end) return ['% Incomplete command.']
+    const bad = tooMany(cli, a, 6)
+    if (bad) return bad
     const mask = (a[4] === 'netmask') ? a[5] : null
     cli.dev.nat.pools[name] = { name, start, end, mask }
     return []
