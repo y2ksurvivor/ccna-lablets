@@ -299,6 +299,7 @@ export function renderCdpNeighbors(dev, net, detail = false) {
       out.push(`Device ID: ${n.neighborName}`)
       out.push(`Platform: ${n.platform},  Capabilities: ${n.capability}`)
       out.push(`Interface: ${n.localPort},  Port ID (outgoing port): ${n.remotePort}`)
+      if (n.nativeVlan != null) out.push(`Native VLAN: ${n.nativeVlan}`)
       out.push('')
     }
     return out

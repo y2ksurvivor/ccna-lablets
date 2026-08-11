@@ -119,7 +119,7 @@ export const vlanBasics = {
     {
       id: 'native-vlan',
       text: 'Create VLAN 99 and make it the native VLAN on the Gi0/24 trunk — on BOTH ends',
-      hints: ['Untagged frames on a trunk ride the native VLAN, which defaults to 1. Moving it to a dedicated, otherwise-unused VLAN is standard practice — but both ends must agree, or the switches report a native VLAN mismatch. Create the VLAN itself as well, so it exists in the database rather than being referenced out of thin air.',
+      hints: ['Untagged frames on a trunk ride the native VLAN, which defaults to 1. Moving it to a dedicated, otherwise-unused VLAN is standard practice — but both ends must agree. Set one side only and CDP will tell you: %CDP-4-NATIVE_VLAN_MISMATCH. Create the VLAN itself as well, so it exists in the database rather than being referenced out of thin air.',
         'vlan 99\ninterface gi0/24 → switchport trunk native vlan 99   (both commands on each switch)'],
       check: (net) =>
         vlanExists(net, 'SW1', 99) && vlanExists(net, 'SW2', 99) &&
@@ -129,7 +129,7 @@ export const vlanBasics = {
     {
       id: 'trunk-check',
       text: 'Verify: run show interfaces trunk on SW1 and SW2 — Gi0/24 is trunking VLANs 10 and 20 with native VLAN 99',
-      hints: ['The trunk table is the direct evidence: mode, encapsulation, native VLAN, and which VLANs are allowed and active. Check the native VLAN column matches on both switches.',
+      hints: ['The trunk table is the direct evidence: mode, encapsulation, native VLAN, and which VLANs are allowed and active. Check the native VLAN column matches on both switches — show cdp neighbors detail reports the far end\'s native VLAN too, which is how you spot a mismatch from one side.',
         'SW1# show interfaces trunk   then the same on SW2'],
       check: (net) =>
         portIsTrunk(net, 'SW1', 'gi0/24') && portIsTrunk(net, 'SW2', 'gi0/24') &&

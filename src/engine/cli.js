@@ -15,6 +15,7 @@
 
 import { getInterface, canonicalIface, shortIface, observe, logIfaceState } from './device.js'
 import { pingIpv6, splitPrefix, ipv6ToBig, bigToIpv6, netV6 } from './ipv6.js'
+import { nativeVlanMismatch, nativeVlanMismatchLog } from './network.js'
 import { pingFromDevice as devicePing } from './l3.js'
 import {
   renderRunningConfig, renderIpIntBrief, renderVlanBrief,
@@ -863,6 +864,16 @@ function tooMany(cli, a, n) {
   return a.length > n ? cli.invalid(a[n]) : null
 }
 
+// CDP reports a native VLAN disagreement as soon as it hears the neighbour's
+// advertisement. There is no timer here, so the warning is emitted when the
+// configuration change creates the disagreement — which is when a real operator
+// would see it appear on the console.
+function cdpNativeWarning(cli, ifc) {
+  if (!cli.net) return []
+  const m = nativeVlanMismatch(cli.net, cli.dev.id, ifc.name)
+  return m ? [nativeVlanMismatchLog(m)] : []
+}
+
 function switchportCmd(cli, a) {
   const ifc = cli.ctx.iface
   // Each form below consumes a fixed number of tokens. Anything after that is a
@@ -878,7 +889,7 @@ function switchportCmd(cli, a) {
       if (bad) return bad
       ifc.mode = a[1]
       ifc.modeExplicit = true
-      return []
+      return cdpNativeWarning(cli, ifc)
     }
     return a[1] ? cli.invalid(a[1]) : ['% Incomplete command.']
   }
@@ -897,7 +908,7 @@ function switchportCmd(cli, a) {
       const bad = extra(4)
       if (bad) return bad
       ifc.trunkNativeVlan = id
-      return []
+      return cdpNativeWarning(cli, ifc)
     }
     if (a[1] === 'allowed' && a[2] === 'vlan') {
       const list = a[3]

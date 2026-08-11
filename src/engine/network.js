@@ -143,6 +143,9 @@ export function discoveryNeighbors(net, devId, proto) {
       remotePort: nbIfc.shortName,
       capability: capabilityCode(nbDev),
       platform: nbDev.kind === 'router' ? 'CCNA-Router' : 'CCNA-Switch',
+      // CDP advertises the sender's native VLAN, which is how a mismatch is
+      // discovered in the first place.
+      nativeVlan: nbIfc.mode === 'trunk' ? (nbIfc.trunkNativeVlan || 1) : null,
     })
   }
   return out
@@ -226,4 +229,40 @@ export function ping(net, srcId, dstIp) {
   const reached = floodVlan(net, sv.switchId, sv.vlan)
   if (reached.has(dst.id)) return { ok: true, reason: 'reply' }
   return { ok: false, reason: 'no L2 path in VLAN ' + sv.vlan }
+}
+
+// --- native VLAN consistency -------------------------------------------------
+
+// Two trunk ends must agree on the native VLAN. When they disagree, untagged
+// frames sent by one side are filed into a different VLAN by the other — the
+// VLANs silently merge. CDP notices because each side advertises its own native
+// VLAN. Returns the details of the disagreement, or null when the ends agree
+// (or when this is not a trunk-to-trunk link at all).
+export function nativeVlanMismatch(net, devId, ifaceName) {
+  const dev = net.devices[devId]
+  const ifc = dev && getInterface(dev, ifaceName)
+  if (!ifc || ifc.shutdown || ifc.mode !== 'trunk') return null
+  const nb = neighbor(net, devId, ifc.name)
+  if (!nb) return null
+  const nbDev = net.devices[nb.devId]
+  if (!nbDev || nbDev.kind === 'host') return null
+  const nbIfc = getInterface(nbDev, nb.port)
+  if (!nbIfc || nbIfc.shutdown || nbIfc.mode !== 'trunk') return null
+
+  const local = ifc.trunkNativeVlan || 1
+  const remote = nbIfc.trunkNativeVlan || 1
+  if (local === remote) return null
+  return {
+    localPort: ifc.name,
+    localNative: local,
+    neighborName: nbDev.hostname,
+    neighborPort: nbIfc.name,
+    remoteNative: remote,
+  }
+}
+
+// The IOS log line CDP emits on discovering the disagreement.
+export function nativeVlanMismatchLog(m) {
+  return `%CDP-4-NATIVE_VLAN_MISMATCH: Native VLAN mismatch discovered on ` +
+    `${m.localPort} (${m.localNative}), with ${m.neighborName} ${m.neighborPort} (${m.remoteNative}).`
 }

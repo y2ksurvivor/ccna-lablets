@@ -457,3 +457,52 @@ describe('"no" resolves abbreviations', () => {
     expect(cli.execute('no').join('\n')).toMatch(/Incomplete/)
   })
 })
+
+describe('native VLAN mismatch is reported like IOS', () => {
+  const trunkPair = () => {
+    const sim = getScenario('vlan-basics').build()
+    for (const sw of ['SW1', 'SW2']) {
+      for (const c of ['enable', 'conf t', 'vlan 99', 'exit', 'interface gi0/24',
+        'switchport mode trunk']) sim.consoles[sw].execute(c)
+    }
+    return sim
+  }
+  const MISMATCH = /%CDP-4-NATIVE_VLAN_MISMATCH/
+
+  it('warns when one end moves its native VLAN and the other has not', () => {
+    const sim = trunkPair()
+    const out = sim.consoles.SW1.execute('switchport trunk native vlan 99')
+    expect(out.join('\n')).toMatch(MISMATCH)
+    expect(out[0]).toContain('GigabitEthernet0/24 (99)')
+    expect(out[0]).toContain('SW2 GigabitEthernet0/24 (1)')
+  })
+
+  it('stays quiet once both ends agree', () => {
+    const sim = trunkPair()
+    sim.consoles.SW1.execute('switchport trunk native vlan 99')
+    expect(sim.consoles.SW2.execute('switchport trunk native vlan 99')).toEqual([])
+  })
+
+  it('warns from whichever console created the disagreement', () => {
+    const sim = trunkPair()
+    sim.consoles.SW1.execute('switchport trunk native vlan 99')
+    const out = sim.consoles.SW2.execute('switchport trunk native vlan 88')
+    expect(out[0]).toContain('GigabitEthernet0/24 (88)')
+    expect(out[0]).toContain('SW1 GigabitEthernet0/24 (99)')
+  })
+
+  it('does not warn on an access port', () => {
+    const sim = getScenario('vlan-basics').build()
+    for (const c of ['enable', 'conf t', 'interface gi0/1',
+      'switchport mode access']) sim.consoles.SW1.execute(c)
+    expect(sim.consoles.SW1.execute('switchport mode access')).toEqual([])
+  })
+
+  it('show cdp neighbors detail reports the far end native VLAN', () => {
+    const sim = trunkPair()
+    sim.consoles.SW1.execute('switchport trunk native vlan 99')
+    sim.consoles.SW1.execute('end')
+    expect(sim.consoles.SW1.execute('show cdp neighbors detail').join('\n'))
+      .toContain('Native VLAN: 1')
+  })
+})

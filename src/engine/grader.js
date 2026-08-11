@@ -26,7 +26,7 @@ export function scorePct(results) {
 
 import { getInterface, canonicalIface, hasObserved } from './device.js'
 import { renderRunningConfig } from './show.js'
-import { discoveryNeighbors, etherchannelUp } from './network.js'
+import { discoveryNeighbors, etherchannelUp, nativeVlanMismatch } from './network.js'
 import { ping, routeLookup, ospfNeighbors } from './l3.js'
 
 // --- L3 / routing checks -----------------------------------------------------
@@ -307,6 +307,11 @@ export function trunkNativeVlan(net, devId, ifaceName) {
   const ifc = d.interfaces[canonicalIface(ifaceName)]
   if (!ifc || ifc.mode !== 'trunk') return null
   return ifc.trunkNativeVlan || 1
+}
+
+// True when this trunk end and its neighbour disagree on the native VLAN.
+export function hasNativeVlanMismatch(net, devId, ifaceName) {
+  return nativeVlanMismatch(net, devId, ifaceName) !== null
 }
 
 export function portIsTrunk(net, devId, ifaceName) {
