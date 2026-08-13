@@ -24,7 +24,7 @@ export const etherchannel = {
     ' 2. On SW2, do the same so the far end negotiates.',
     ' 3. Verify the EtherChannel (Po1) is bundled/up.',
     '',
-    'Verify with: show etherchannel summary   (look for Po1(U) and P on ports)',
+    'Verify with: show etherchannel summary   (look for Po1(SU) and (P) on ports)',
   ],
 
   build() {
@@ -70,9 +70,9 @@ export const etherchannel = {
     },
     {
       id: 'channel-up',
-      text: 'Verify: run show etherchannel summary on SW1 and SW2 — Po1 is (U) with both ports (P)',
+      text: 'Verify: run show etherchannel summary on SW1 and SW2 — Po1 is (SU) with both ports (P)',
       hints: ['LACP only bundles if the two sides\' modes are compatible. Two passive ends never start negotiation — at least one must be active. Then check the summary on each switch — each one only reports its own view.',
-        'On SW1: show etherchannel summary → look for Po1(U) and (P) on the ports. Then the same on SW2.'],
+        'On SW1: show etherchannel summary → Po1(SU) means Layer 2 and in use; each port should show (P) for bundled. Then the same on SW2.'],
       // Gated on the show command as well as the state: a verification step you
       // never ran isn't verification. Each switch only reports its own side, so
       // "both ends" means running it on both.

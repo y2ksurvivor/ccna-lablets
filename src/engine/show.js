@@ -335,9 +335,13 @@ export function renderLldpNeighbors(dev, net) {
 export function renderEtherchannelSummary(dev, net) {
   const pcs = Object.values(dev.portChannels || {})
   const out = [
-    'Flags:  D - down        P - bundled in port-channel',
+    'Flags:  D - down        P - in port-channel',
     '        I - stand-alone s - suspended',
+    '        H - Hot-standby (LACP only)',
+    '        R - Layer3      S - Layer2',
+    '        u - unsuitable for bundling',
     '        U - in use      f - failed to allocate aggregator',
+    '        d - default port',
     '',
     'Number of channel-groups in use: ' + pcs.length,
     'Number of aggregators:           ' + pcs.length,
@@ -347,14 +351,17 @@ export function renderEtherchannelSummary(dev, net) {
   ]
   for (const po of pcs) {
     const up = net ? etherchannelUp(net, dev.id, po.id) : false
-    const flag = up ? 'U' : 'D'
+    // The port-channel carries its own flags: layer (S/R) then state (U/D).
+    // Everything here is a switch port, so the layer flag is always S — a
+    // Layer 3 EtherChannel (no switchport on the Po) would report R.
+    const poFlags = `S${up ? 'U' : 'D'}`
     const proto = memberProtocol(dev, po)
     const ports = po.members.map(m => {
       const ifc = getInterface(dev, m)
-      const pflag = up ? 'P' : 'D'
-      return `${ifc.shortName}(${pflag})`
-    }).join(' ')
-    out.push(`${String(po.id).padEnd(6)} Po${String(po.id).padEnd(11)} ${(proto).padEnd(11)} ${ports}`)
+      return `${ifc.shortName}(${up ? 'P' : 'D'})`.padEnd(11)
+    }).join('').trimEnd()
+    const poName = `Po${po.id}(${poFlags})`
+    out.push(`${String(po.id).padEnd(6)} ${poName.padEnd(13)} ${proto.padEnd(11)} ${ports}`)
   }
   return out
 }

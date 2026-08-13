@@ -506,3 +506,45 @@ describe('native VLAN mismatch is reported like IOS', () => {
       .toContain('Native VLAN: 1')
   })
 })
+
+describe('show etherchannel summary matches IOS layout', () => {
+  const lab = (mode, bothEnds = true) => {
+    const sim = getScenario('etherchannel').build()
+    const switches = bothEnds ? ['SW1', 'SW2'] : ['SW1']
+    for (const sw of switches) {
+      for (const c of ['enable', 'conf t', 'interface gi0/1', `channel-group 1 mode ${mode}`,
+        'exit', 'interface gi0/2', `channel-group 1 mode ${mode}`, 'end']) sim.consoles[sw].execute(c)
+    }
+    return sim.consoles.SW1.execute('show etherchannel summary')
+  }
+
+  it('flags the port-channel itself, not just the ports', () => {
+    // The flag was computed and thrown away: the column printed a bare "Po1"
+    // while the lablet told the learner to look for "Po1(U)".
+    const row = lab('active').at(-1)
+    expect(row).toMatch(/Po1\(SU\)/)
+  })
+
+  it('shows SD and (D) when the far end is not configured', () => {
+    const row = lab('active', false).at(-1)
+    expect(row).toMatch(/Po1\(SD\)/)
+    expect(row).toMatch(/Gi0\/1\(D\)/)
+  })
+
+  it('carries the full IOS flag legend', () => {
+    const out = lab('active').join('\n')
+    for (const line of ['D - down', 'P - in port-channel', 'H - Hot-standby (LACP only)',
+      'R - Layer3', 'S - Layer2', 'u - unsuitable for bundling', 'U - in use', 'd - default port']) {
+      expect(out).toContain(line)
+    }
+  })
+
+  it('aligns the port column under its header', () => {
+    const out = lab('active')
+    const header = out.find(l => l.startsWith('Group'))
+    const row = out.at(-1)
+    expect(row.indexOf('Po1')).toBe(header.indexOf('Port-channel'))
+    expect(row.indexOf('LACP')).toBe(header.indexOf('Protocol'))
+    expect(row.indexOf('Gi0/1')).toBe(header.indexOf('Ports'))
+  })
+})
