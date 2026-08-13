@@ -8,6 +8,40 @@ import { routingTable, ospfNeighbors, maskToLen } from './l3.js'
 import { routingTableV6, bigToIpv6 } from './ipv6.js'
 import { ntpSynced, natTranslations } from './ipservices.js'
 
+// --- password display ---------------------------------------------------------
+
+// Cisco "type 7" encryption: a Vigenere cipher over a published key. It is
+// trivially reversible — which is the point of the lesson. `service
+// password-encryption` only obscures shoulder-surfing, it is not security.
+const T7_KEY = 'dsfd;kfoA,.iyewrkldJKDHSUBsgvca69834ncxv9873254k;fg87'
+export function type7(plain, salt = 2) {
+  let out = String(salt).padStart(2, '0')
+  for (let i = 0; i < plain.length; i++) {
+    const k = T7_KEY.charCodeAt((salt + i) % T7_KEY.length)
+    out += (plain.charCodeAt(i) ^ k).toString(16).toUpperCase().padStart(2, '0')
+  }
+  return out
+}
+
+// Stand-in for the type 5 (MD5-crypt) digest IOS stores for `enable secret`.
+// Deterministic so a given secret always renders the same way; it is NOT a real
+// MD5-crypt hash, and nothing in the simulator tries to verify it. What matters
+// for the lablet is that a secret is never shown in the clear, unlike a password.
+export function type5(plain) {
+  let h1 = 0x811c9dc5, h2 = 0x01000193
+  for (let i = 0; i < plain.length; i++) {
+    h1 = Math.imul(h1 ^ plain.charCodeAt(i), 16777619) >>> 0
+    h2 = Math.imul(h2 + plain.charCodeAt(i) * (i + 1), 2246822519) >>> 0
+  }
+  const B = './0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+  const enc = (n, len) => {
+    let s = ''
+    for (let i = 0; i < len; i++) { s += B[n & 63]; n = Math.floor(n / 64) }
+    return s
+  }
+  return `$1$${enc(h1, 4)}$${enc(h2, 8)}${enc(h1 ^ h2, 8)}`
+}
+
 export function renderRunningConfig(dev) {
   const out = ['Building configuration...', '', 'Current configuration:', '!']
   if (dev.servicePasswordEncryption) out.push('service password-encryption', '!')
@@ -17,12 +51,16 @@ export function renderRunningConfig(dev) {
     out.push(`ipv6 route ${r.prefix}/${r.len} ${r.nextHop}${r.ad && r.ad !== 1 ? ' ' + r.ad : ''}`)
   }
   if ((dev.ipv6Routes || []).length) out.push('!')
-  if (dev.enableSecret) out.push(`enable secret ${dev.enableSecret}`)
-  if (dev.enablePassword) out.push(`enable password ${dev.enablePassword}`)
+  // A secret is always stored hashed; a password is plaintext until
+  // `service password-encryption` turns it into a (reversible) type 7 string.
+  const shown = (pw) => dev.servicePasswordEncryption ? `7 ${type7(pw)}` : pw
+  if (dev.enableSecret) out.push(`enable secret 5 ${type5(dev.enableSecret)}`)
+  if (dev.enablePassword) out.push(`enable password ${shown(dev.enablePassword)}`)
   if (dev.enableSecret || dev.enablePassword) out.push('!')
   if (dev.dhcpSnooping?.enabled) { out.push('ip dhcp snooping'); if (dev.dhcpSnooping.vlans.length) out.push(`ip dhcp snooping vlan ${dev.dhcpSnooping.vlans.join(',')}`); out.push('!') }
   if (dev.arpInspection?.vlans.length) out.push(`ip arp inspection vlan ${dev.arpInspection.vlans.join(',')}`, '!')
-  for (const u of (dev.users || [])) out.push(`username ${u.name} secret ${u.secret}`)
+  // A local user's secret is hashed the same way the enable secret is.
+  for (const u of (dev.users || [])) out.push(`username ${u.name} secret 5 ${type5(u.secret)}`)
   if ((dev.users || []).length) out.push('!')
   if (dev.domainName) out.push(`ip domain-name ${dev.domainName}`, '!')
   if (dev.rsaKey) out.push(`! crypto key rsa ${dev.rsaKey.modulus} bits generated`, '!')
@@ -113,14 +151,14 @@ export function renderRunningConfig(dev) {
   const con = dev.lines?.console
   if (con && (con.login || con.password)) {
     out.push('line con 0')
-    if (con.password) out.push(` password ${con.password}`)
+    if (con.password) out.push(` password ${shown(con.password)}`)
     if (con.login) out.push(con.login === 'local' ? ' login local' : ' login')
     out.push('!')
   }
   const vty = dev.lines?.vty
   if (vty && (vty.transportInput || vty.login || vty.password)) {
     out.push('line vty 0 4')
-    if (vty.password) out.push(` password ${vty.password}`)
+    if (vty.password) out.push(` password ${shown(vty.password)}`)
     if (vty.login) out.push(vty.login === 'local' ? ' login local' : ' login')
     if (vty.transportInput) out.push(` transport input ${vty.transportInput.join(' ')}`)
     out.push('!')

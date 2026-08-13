@@ -597,3 +597,77 @@ describe('EXEC mode navigation matches IOS', () => {
     expect(cli.prompt()).toBe('R1#')
   })
 })
+
+describe('passwords in running-config (blueprint 5.3)', () => {
+  const hardened = (extra = []) => {
+    const sim = getScenario('device-hardening').build()
+    const cli = sim.consoles.R1
+    for (const c of ['enable', 'conf t', 'enable secret cisco123',
+      'enable password otherpass', 'line console 0', 'password conpass', 'login',
+      'exit', ...extra, 'end']) cli.execute(c)
+    return cli.execute('show running-config').join('\n')
+  }
+
+  it('never shows the enable secret in the clear', () => {
+    const cfg = hardened()
+    expect(cfg).not.toContain('enable secret cisco123')
+    expect(cfg).toMatch(/enable secret 5 \$1\$/)
+  })
+
+  it('shows passwords in the clear until service password-encryption', () => {
+    expect(hardened()).toContain('enable password otherpass')
+    expect(hardened()).toContain(' password conpass')
+  })
+
+  it('converts passwords to type 7 once encryption is on', () => {
+    const cfg = hardened(['service password-encryption'])
+    expect(cfg).not.toContain('otherpass')
+    expect(cfg).not.toContain('conpass')
+    expect(cfg).toMatch(/enable password 7 [0-9A-F]+/)
+    expect(cfg).toMatch(/ password 7 [0-9A-F]+/)
+  })
+
+  it('leaves the secret hashed, not re-encrypted, when type 7 is enabled', () => {
+    expect(hardened(['service password-encryption'])).toMatch(/enable secret 5 \$1\$/)
+  })
+
+  it('hashes a local user secret too', () => {
+    const cli = getScenario('ssh').build().consoles.R1
+    for (const c of ['enable', 'conf t', 'username admin secret cisco123', 'end']) cli.execute(c)
+    const cfg = cli.execute('show running-config').join('\n')
+    expect(cfg).not.toContain('secret cisco123')
+    expect(cfg).toMatch(/username admin secret 5 \$1\$/)
+  })
+
+  it('refuses an enable password identical to the enable secret', () => {
+    const sim = getScenario('device-hardening').build()
+    const cli = sim.consoles.R1
+    for (const c of ['enable', 'conf t', 'enable secret cisco123']) cli.execute(c)
+    const out = cli.execute('enable password cisco123').join('\n')
+    expect(out).toContain('same as your enable secret')
+    expect(sim.net.devices.R1.enablePassword).toBe(null)
+  })
+
+  it('accepts an enable password that differs from the secret', () => {
+    const sim = getScenario('device-hardening').build()
+    const cli = sim.consoles.R1
+    for (const c of ['enable', 'conf t', 'enable secret cisco123']) cli.execute(c)
+    expect(cli.execute('enable password otherpass')).toEqual([])
+    expect(sim.net.devices.R1.enablePassword).toBe('otherpass')
+  })
+
+  it('type 7 is reversible, which is the whole lesson', async () => {
+    const { type7 } = await import('../src/engine/show.js')
+    const KEY = 'dsfd;kfoA,.iyewrkldJKDHSUBsgvca69834ncxv9873254k;fg87'
+    const decode = (enc) => {
+      const salt = parseInt(enc.slice(0, 2), 10)
+      let out = ''
+      for (let i = 0; i * 2 + 2 < enc.length; i++) {
+        const byte = parseInt(enc.substr(2 + i * 2, 2), 16)
+        out += String.fromCharCode(byte ^ KEY.charCodeAt((salt + i) % KEY.length))
+      }
+      return out
+    }
+    expect(decode(type7('conpass'))).toBe('conpass')
+  })
+})

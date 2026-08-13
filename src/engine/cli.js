@@ -313,8 +313,20 @@ const COMMANDS = {
         ? [{ name: 'secret', help: 'Assign the privileged level secret' }, { name: 'password', help: 'Assign the privileged level password' }]
         : [{ name: 'WORD', help: 'The enable secret/password' }],
       run: (cli, a) => {
-        if (a[0] === 'secret') { cli.dev.enableSecret = a.slice(1).join(' '); return [] }
-        if (a[0] === 'password') { cli.dev.enablePassword = a.slice(1).join(' '); return [] }
+        const value = a.slice(1).join(' ')
+        if (!value) return ['% Incomplete command.']
+        if (a[0] === 'secret') { cli.dev.enableSecret = value; return [] }
+        if (a[0] === 'password') {
+          // IOS refuses a password identical to the secret and leaves the old
+          // password in place — the two would be indistinguishable to a reader
+          // of the config, defeating the point of having a hashed secret.
+          if (cli.dev.enableSecret && value === cli.dev.enableSecret) {
+            return ['The enable password you have chosen is the same as your enable secret.',
+              'This is not recommended.  Re-enter the enable password.']
+          }
+          cli.dev.enablePassword = value
+          return []
+        }
         return ['% Incomplete command.']
       },
     },
