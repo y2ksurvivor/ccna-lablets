@@ -548,3 +548,52 @@ describe('show etherchannel summary matches IOS layout', () => {
     expect(row.indexOf('Gi0/1')).toBe(header.indexOf('Ports'))
   })
 })
+
+describe('EXEC mode navigation matches IOS', () => {
+  const r1 = () => getScenario('ipv4-addressing').build().consoles.R1
+
+  it('disable steps down from privileged to user EXEC, silently', () => {
+    const cli = r1()
+    cli.execute('enable')
+    expect(cli.prompt()).toBe('R1#')
+    expect(cli.execute('disable')).toEqual([])
+    expect(cli.prompt()).toBe('R1>')
+  })
+
+  it('exit ends the session rather than de-privileging', () => {
+    const cli = r1()
+    cli.execute('enable')
+    const out = cli.execute('exit').join('\n')
+    expect(out).toContain('R1 con0 is now available')
+    expect(out).toContain('Press RETURN to get started.')
+    expect(cli.prompt()).toBe('R1>')
+  })
+
+  // `end` is a configuration-mode command. At an EXEC prompt IOS rejects it.
+  it.each([[[], 'R1>'], [['enable'], 'R1#']])('end is invalid at %s', (setup, prompt) => {
+    const cli = r1()
+    for (const c of setup) cli.execute(c)
+    expect(cli.prompt()).toBe(prompt)
+    expect(cli.execute('end').join('\n')).toMatch(/% Invalid input detected/)
+    expect(cli.prompt()).toBe(prompt)
+  })
+
+  it('end returns to privileged EXEC from any config mode', () => {
+    for (const setup of [['enable', 'conf t'], ['enable', 'conf t', 'interface gi0/0'],
+      ['enable', 'conf t', 'line vty 0 4'], ['enable', 'conf t', 'router ospf 1']]) {
+      const cli = r1()
+      for (const c of setup) cli.execute(c)
+      expect(cli.execute('end')).toEqual([])
+      expect(cli.prompt()).toBe('R1#')
+    }
+  })
+
+  it('exit steps up one level from config modes', () => {
+    const cli = r1()
+    for (const c of ['enable', 'conf t', 'interface gi0/0']) cli.execute(c)
+    cli.execute('exit')
+    expect(cli.prompt()).toBe('R1(config)#')
+    cli.execute('exit')
+    expect(cli.prompt()).toBe('R1#')
+  })
+})

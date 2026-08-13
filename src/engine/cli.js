@@ -203,6 +203,15 @@ export class CLI {
 // --- command tables ----------------------------------------------------------
 // Each entry: { help, run(cli, args, allTokens) -> string[] }
 
+// `exit` at a user or privileged EXEC prompt closes the terminal session — it
+// does NOT step down from # to >, which is `disable`'s job. On a console the
+// session immediately becomes available again, so the learner lands back at the
+// unprivileged prompt, but the banner makes clear a logout happened.
+function endExecSession(cli) {
+  cli.mode = 'user'
+  return ['', `${cli.dev.hostname} con0 is now available`, '', 'Press RETURN to get started.']
+}
+
 function needEnable(cli) {
   return cli.mode === 'enable'
 }
@@ -215,7 +224,7 @@ const COMMANDS = {
     },
     ping: { help: 'Send echo messages', argHelp: pingArgHelp, run: (cli, a) => pingCmd(cli, a) },
     show: { help: 'Show running system information', argHelp: showArgHelp, run: (cli, a) => showCmd(cli, a) },
-    exit: { help: 'Exit from the EXEC', run: () => [] },
+    exit: { help: 'Exit from the EXEC', noArgs: true, run: (cli) => endExecSession(cli) },
     '?': { help: 'Help', run: () => [] },
   },
 
@@ -260,7 +269,7 @@ const COMMANDS = {
         return ['% Incomplete command.']
       },
     },
-    exit: { help: 'Exit from the EXEC', noArgs: true, run: (cli) => { cli.mode = 'user'; return [] } },
+    exit: { help: 'Exit from the EXEC', noArgs: true, run: (cli) => endExecSession(cli) },
   },
 
   config: {
