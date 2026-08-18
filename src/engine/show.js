@@ -4,7 +4,7 @@
 
 import { discoveryNeighbors, etherchannelUp } from './network.js'
 import { getInterface, canonicalIface } from './device.js'
-import { routingTable, ospfNeighbors, maskToLen } from './l3.js'
+import { routingTable, ospfNeighbors, maskToLen, ipToInt, intToIp } from './l3.js'
 import { routingTableV6, bigToIpv6 } from './ipv6.js'
 import { ntpSynced, natTranslations } from './ipservices.js'
 
@@ -433,35 +433,92 @@ export function renderEtherchannelSummary(dev, net) {
   return out
 }
 
+// Classful boundary of an address — IOS groups the routing table by major
+// network, and that grouping is classful even in a classless world.
+function classfulLen(ipInt) {
+  const first = (ipInt >>> 24) & 255
+  if (first < 128) return 8
+  if (first < 192) return 16
+  return 24
+}
+
 export function renderIpRoute(dev, net) {
   if (dev.kind !== 'router') return ['% This command is available on routers']
   // routingTable() already installs only the best route per prefix, so a
   // higher-AD floating static stays out of the table while the primary is up.
   const table = routingTable(net, dev)
+
+  // IOS 15 lists an L /32 for each connected interface's own address alongside
+  // the C route for its subnet. These are display-only: adding them to the real
+  // table would change forwarding.
+  const rows = []
+  for (const r of table) {
+    rows.push(r)
+    if (!r.connected) continue
+    const ifc = getInterface(dev, r.iface)
+    const ipInt = ifc?.ip ? ipToInt(ifc.ip) : null
+    if (ipInt === null) continue
+    // A /32 connected route (a loopback) already *is* the host route; IOS does
+    // not print an identical L alongside it.
+    if (maskToLen(r.mask) === 32) continue
+    rows.push({
+      ...r, proto: 'L', prefix: ifc.ip, mask: '255.255.255.255',
+      netInt: ipInt, maskInt: 0xffffffff >>> 0, local: true,
+    })
+  }
+
   const out = [
-    'Codes: C - connected, S - static, O - OSPF, * - candidate default',
+    'Codes: L - local, C - connected, S - static, R - RIP, M - mobile, B - BGP',
+    '       D - EIGRP, EX - EIGRP external, O - OSPF, IA - OSPF inter area',
+    '       E1 - OSPF external type 1, E2 - OSPF external type 2',
+    '       i - IS-IS, su - IS-IS summary, * - candidate default',
+    '       U - per-user static route, o - ODR, + - replicated route',
     '',
   ]
-  const def = table.find(r => r.netInt === 0 && r.maskInt === 0)
+  const def = rows.find(r => r.netInt === 0 && r.maskInt === 0)
   out.push(def
     ? `Gateway of last resort is ${def.nextHop || '0.0.0.0'} to network 0.0.0.0`
     : 'Gateway of last resort is not set')
   out.push('')
 
-  table.sort((a, b) => (a.netInt >>> 0) - (b.netInt >>> 0))
-  for (const r of table) {
-    const len = maskToLen(r.mask)
-    const prefix = `${r.prefix}/${len}`
-    if (r.connected) {
-      const ifc = getInterface(dev, r.iface)
-      out.push(`${'C'.padEnd(9)}${prefix} is directly connected, ${ifc ? ifc.name : r.iface}`)
-    } else {
-      // A default route is a candidate default, which IOS marks with *.
-      const code = r.netInt === 0 && r.maskInt === 0 ? `${r.proto}*` : r.proto
-      out.push(`${code.padEnd(9)}${prefix} [${r.ad}/${r.metric}] via ${r.nextHop}`)
-    }
+  const render = (r, indent) => {
+    const prefix = `${r.prefix}/${maskToLen(r.mask)}`
+    const isDefault = r.netInt === 0 && r.maskInt === 0
+    const code = isDefault ? `${r.proto}*` : r.proto
+    const label = r.connected || r.local
+      ? `is directly connected, ${getInterface(dev, r.iface)?.name || r.iface}`
+      : `[${r.ad}/${r.metric}] via ${r.nextHop}`
+    return `${code.padEnd(indent)}${prefix} ${label}`
   }
-  if (table.length === 0) out.push('(routing table is empty)')
+
+  // The default route sits at the left margin, outside any major network.
+  if (def) out.push(render(def, 6))
+
+  // Everything else is grouped by classful major network.
+  const groups = new Map()
+  for (const r of rows) {
+    if (r === def) continue
+    const len = classfulLen(r.netInt)
+    const major = (r.netInt & (len === 8 ? 0xff000000 : len === 16 ? 0xffff0000 : 0xffffff00)) >>> 0
+    const key = `${major}/${len}`
+    if (!groups.has(key)) groups.set(key, { major, len, routes: [] })
+    groups.get(key).routes.push(r)
+  }
+
+  for (const g of [...groups.values()].sort((a, b) => (a.major >>> 0) - (b.major >>> 0))) {
+    g.routes.sort((a, b) => (a.netInt >>> 0) - (b.netInt >>> 0) || a.maskInt - b.maskInt)
+    const masks = new Set(g.routes.map(r => r.maskInt >>> 0))
+    const single = g.routes.length === 1 && maskToLen(g.routes[0].mask) === g.len
+    if (!single) {
+      const n = g.routes.length
+      out.push(masks.size > 1
+        ? `      ${intToIp(g.major)}/${g.len} is variably subnetted, ${n} subnets, ${masks.size} masks`
+        : `      ${intToIp(g.major)}/${g.len} is subnetted, ${n} subnets`)
+    }
+    for (const r of g.routes) out.push(render(r, single ? 6 : 9))
+  }
+
+  if (!rows.length) out.push('(routing table is empty)')
   return out
 }
 

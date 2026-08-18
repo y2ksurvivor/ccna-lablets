@@ -26,11 +26,42 @@ describe('show ip route', () => {
     expect(text).not.toMatch(/connected, Gi0\//)
   })
 
-  it('lines every route up in the same column', () => {
-    const rows = routed().filter(l => /^[A-Z]/.test(l) && /\d+\.\d+\.\d+\.\d+\//.test(l))
-    expect(rows.length).toBeGreaterThan(1)
-    const cols = rows.map(r => r.search(/\d/))
-    expect(new Set(cols).size).toBe(1)
+  it('groups subnets under their classful major network', () => {
+    const text = routed().join('\n')
+    expect(text).toMatch(/^ {6}10\.0\.0\.0\/8 is variably subnetted, 2 subnets, 2 masks$/m)
+    expect(text).toMatch(/^C {8}10\.1\.12\.0\/30 is directly connected, GigabitEthernet0\/1$/m)
+  })
+
+  it('emits an L host route for each connected interface address', () => {
+    expect(routed().join('\n'))
+      .toMatch(/^L {8}10\.1\.12\.1\/32 is directly connected, GigabitEthernet0\/1$/m)
+  })
+
+  it('indents grouped routes further than margin routes', () => {
+    const rows = routed().filter(l => /^[A-Z]/.test(l))
+    // A default sits at the margin (code padded to 6); group members to 9.
+    const margin = rows.filter(l => l.startsWith('S*')).map(l => l.search(/\d/))
+    const grouped = rows.filter(l => /^[CL] /.test(l)).map(l => l.search(/\d/))
+    expect(new Set(margin)).toEqual(new Set([6]))
+    expect(new Set(grouped)).toEqual(new Set([9]))
+  })
+
+  it('prints a lone classful route at the margin with no header', () => {
+    const text = out('static-routing', 'R2', ['enable', 'conf t',
+      'ip route 192.168.1.0 255.255.255.0 10.1.12.1', 'end'], 'show ip route').join('\n')
+    expect(text).toMatch(/^S {5}192\.168\.1\.0\/24 \[1\/0\] via 10\.1\.12\.1$/m)
+    expect(text).not.toMatch(/192\.168\.1\.0\/24 is (variably )?subnetted/)
+  })
+
+  it('does not duplicate a /32 loopback as both C and L', () => {
+    const text = out('ospf', 'R1', ['enable', 'conf t', 'interface loopback 0',
+      'ip address 1.1.1.1 255.255.255.255', 'end'], 'show ip route').join('\n')
+    expect(text).toMatch(/^C {8}1\.1\.1\.1\/32 is directly connected, Loopback0$/m)
+    expect(text).not.toMatch(/^L {8}1\.1\.1\.1\/32/m)
+  })
+
+  it('lists L - local in the codes block', () => {
+    expect(routed()[0]).toContain('L - local')
   })
 })
 
