@@ -152,8 +152,10 @@ export function getInterface(dev, name) {
       ip: null,
       mask: null,
       ipv6: [], // ['2001:db8:acad:1::1/64', ...]
-      // Switch access ports come up by default; router ports are admin-down.
-      shutdown: dev.kind !== 'switch',
+      // Switch access ports come up by default; router ports are admin-down. A
+      // loopback is a virtual interface — it comes up the moment it exists and
+      // needs no cable, which is why it is the stable choice for a router ID.
+      shutdown: canon.startsWith('Loopback') ? false : dev.kind !== 'switch',
       description: null,
       // switchport
       mode: dev.kind === 'switch' ? 'access' : null, // 'access' | 'trunk'
@@ -182,8 +184,8 @@ export function getInterface(dev, name) {
       dhcpSnoopTrust: false,
       arpInspectTrust: false,
       // link
-      connected: false, // set true when a link is attached
-      lineProtocol: false,
+      connected: canon.startsWith('Loopback'), // a loopback is always "cabled"
+      lineProtocol: canon.startsWith('Loopback'),
       // Traffic and error counters, as `show interfaces` reports them. The
       // in/out figures move as pings traverse the interface; the error fields
       // stay zero unless a scenario seeds them (blueprint 1.4 asks the learner

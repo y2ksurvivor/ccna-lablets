@@ -351,6 +351,23 @@ function ospfInterfaces(dev) {
 
 // Build the OSPF adjacency graph across the network: nodes = OSPF routers,
 // edges = links where both ends run OSPF in the same area (and neither is passive).
+// A router's OSPF router ID: the explicitly configured one, else the highest IP
+// on a loopback, else the highest IP on any up interface. It is an identifier in
+// dotted-decimal form, not a hostname — which is what `show ip ospf neighbor`
+// prints in its Neighbor ID column.
+export function ospfRouterId(dev) {
+  if (dev?.ospf?.routerId) return dev.ospf.routerId
+  const pick = (ifaces) => ifaces
+    .filter(i => i.ip && !i.shutdown)
+    .map(i => ipToInt(i.ip))
+    .filter(n => n !== null)
+    .sort((a, b) => (b >>> 0) - (a >>> 0))[0]
+  const all = Object.values(dev?.interfaces || {})
+  const loopbacks = all.filter(i => i.name.startsWith('Loopback'))
+  const best = pick(loopbacks) ?? pick(all)
+  return best == null ? '0.0.0.0' : intToIp(best)
+}
+
 function ospfGraph(net) {
   const routers = Object.values(net.devices).filter(d => d.kind === 'router' && d.ospf)
   const adj = {} // routerId -> [{to, viaIfaceIp of neighbor (next hop), cost}]
@@ -367,7 +384,7 @@ function ospfGraph(net) {
       // neighbor must run OSPF on that interface, same area
       const nbOspf = ospfInterfaces(nbDev).find(o => o.iface.name === nbIfc.name && !o.passive)
       if (!nbOspf || nbOspf.area !== area) continue
-      adj[r.id].push({ to: nbDev.id, nextHop: nbIfc.ip, cost: 1 })
+      adj[r.id].push({ to: nbDev.id, nextHop: nbIfc.ip, cost: 1, localIface: iface.name })
     }
   }
   return { routers, adj }
@@ -375,7 +392,12 @@ function ospfGraph(net) {
 
 export function ospfNeighbors(net, routerId) {
   const { adj } = ospfGraph(net)
-  return (adj[routerId] || []).map(e => ({ id: e.to, ip: e.nextHop }))
+  return (adj[routerId] || []).map(e => ({
+    id: e.to,                                   // device id, for graders
+    routerId: ospfRouterId(net.devices[e.to]),  // what IOS displays
+    ip: e.nextHop,
+    localIface: e.localIface,
+  }))
 }
 
 // Dijkstra from source router; returns map routerId -> {cost, firstHop}.

@@ -748,3 +748,57 @@ describe('enable challenges for a password when one is configured', () => {
     expect(cli.prompt()).toBe('R1#')
   })
 })
+
+describe('show ip ospf neighbor reports router IDs, not hostnames', () => {
+  const converged = () => {
+    const sim = getScenario('ospf').build()
+    const cfg = {
+      R1: ['router ospf 1', 'router-id 1.1.1.1', 'network 10.1.12.0 0.0.0.3 area 0',
+        'network 192.168.1.0 0.0.0.255 area 0'],
+      R2: ['router ospf 1', 'network 10.1.12.0 0.0.0.3 area 0', 'network 10.1.23.0 0.0.0.3 area 0'],
+      R3: ['router ospf 1', 'network 10.1.23.0 0.0.0.3 area 0', 'network 192.168.3.0 0.0.0.255 area 0'],
+    }
+    for (const [d, cmds] of Object.entries(cfg)) {
+      for (const c of ['enable', 'conf t', ...cmds, 'end']) sim.consoles[d].execute(c)
+    }
+    return sim
+  }
+
+  it('never prints a hostname in the Neighbor ID column', () => {
+    const out = converged().consoles.R2.execute('show ip ospf neighbor').join('\n')
+    expect(out).not.toMatch(/^R[13]\s/m)
+    for (const line of out.split('\n').slice(1)) {
+      expect(line).toMatch(/^\d{1,3}(\.\d{1,3}){3}\s/)
+    }
+  })
+
+  it('shows a pinned router-id verbatim', () => {
+    const out = converged().consoles.R2.execute('show ip ospf neighbor').join('\n')
+    expect(out).toMatch(/^1\.1\.1\.1\s/m)
+  })
+
+  it('derives the ID from the highest interface IP when not pinned', () => {
+    const out = converged().consoles.R2.execute('show ip ospf neighbor').join('\n')
+    // R3 owns 10.1.23.2 and 192.168.3.1; the higher address wins.
+    expect(out).toMatch(/^192\.168\.3\.1\s/m)
+  })
+
+  it('prefers a loopback over a higher physical address', () => {
+    const sim = converged()
+    for (const c of ['conf t', 'interface loopback 0', 'ip address 3.3.3.3 255.255.255.255',
+      'end']) sim.consoles.R3.execute(c)
+    expect(sim.consoles.R2.execute('show ip ospf neighbor').join('\n')).toMatch(/^3\.3\.3\.3\s/m)
+  })
+
+  it('names the local interface the adjacency formed over', () => {
+    const out = converged().consoles.R2.execute('show ip ospf neighbor').join('\n')
+    expect(out).toContain('GigabitEthernet0/1')
+    expect(out).toContain('GigabitEthernet0/2')
+  })
+
+  it('show ip ospf reports the effective ID, not "(unset)"', () => {
+    const sim = converged()
+    expect(sim.consoles.R1.execute('show ip ospf').join('\n')).toContain('with ID 1.1.1.1')
+    expect(sim.consoles.R2.execute('show ip ospf').join('\n')).not.toContain('unset')
+  })
+})

@@ -76,7 +76,7 @@ export const ospfLab = {
     {
       id: 'router-id',
       text: 'On R1, start OSPF process 1 and pin its router-id to 1.1.1.1',
-      hints: ['Without an explicit router-id OSPF picks one from the interfaces — pin it so the ID is predictable.',
+      hints: ['Without an explicit router-id OSPF derives one: the highest loopback IP, or failing that the highest IP on any up interface. Pin it so the ID is predictable and does not change when an interface does. Compare the Neighbor ID column on R2 — R1 shows 1.1.1.1 once pinned, while R3 still shows a derived address.',
         'R1(config)# router ospf 1 → router-id 1.1.1.1'],
       check: (net) => ospfRouterIdIs(net, 'R1', '1.1.1.1'),
     },

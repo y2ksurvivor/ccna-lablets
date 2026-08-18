@@ -72,6 +72,29 @@ describe('abbreviation still rejects what it should', () => {
   })
 })
 
+describe('interface accepts type and number as one token or two', () => {
+  it.each([
+    'interface gi0/0', 'interface GigabitEthernet 0/0', 'interface loopback 0', 'interface lo0',
+  ])('%s', (cmd) => {
+    expect(rejected(run('ospf', 'R3', CONF, cmd))).toBe(false)
+  })
+
+  it.each(['interface gi0/1 BOGUS', 'interface bogus9/9'])('rejects %s', (cmd) => {
+    expect(rejected(run('ospf', 'R3', CONF, cmd))).toBe(true)
+  })
+
+  it('a loopback comes up on creation, with no shutdown needed', () => {
+    const sim = getScenario('ospf').build()
+    const cli = sim.consoles.R3
+    for (const c of ['enable', 'conf t', 'interface loopback 0',
+      'ip address 3.3.3.3 255.255.255.255', 'end']) cli.execute(c)
+    const lo = sim.net.devices.R3.interfaces.Loopback0
+    expect(lo.shutdown).toBe(false)
+    expect(lo.lineProtocol).toBe(true)
+    expect(cli.execute('show ip int brief').join('\n')).toMatch(/Loopback0 +3\.3\.3\.3 +YES manual up +up/)
+  })
+})
+
 describe('? help resolves abbreviations too', () => {
   it.each([
     ['switchport ?', 'port-security'],

@@ -439,7 +439,10 @@ export function renderOspfNeighbors(dev, net) {
   const nbrs = ospfNeighbors(net, dev.id)
   const out = ['Neighbor ID     Pri   State           Dead Time   Address         Interface']
   for (const n of nbrs) {
-    out.push(`${n.id.padEnd(15)} 1     FULL/BDR        00:00:35    ${n.ip.padEnd(15)} `)
+    // Neighbor ID is the neighbour's router ID in dotted decimal, and the last
+    // column names the local interface the adjacency was formed over.
+    const local = n.localIface ? (getInterface(dev, n.localIface)?.name || n.localIface) : ''
+    out.push(`${n.routerId.padEnd(15)} 1     FULL/BDR        00:00:35    ${n.ip.padEnd(15)} ${local}`.trimEnd())
   }
   if (!nbrs.length) out.push('(no OSPF neighbors — check network statements, areas, and interface state)')
   return out

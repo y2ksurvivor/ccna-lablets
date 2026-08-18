@@ -16,7 +16,7 @@
 import { getInterface, canonicalIface, shortIface, observe, logIfaceState } from './device.js'
 import { pingIpv6, splitPrefix, ipv6ToBig, bigToIpv6, netV6 } from './ipv6.js'
 import { nativeVlanMismatch, nativeVlanMismatchLog } from './network.js'
-import { pingFromDevice as devicePing } from './l3.js'
+import { pingFromDevice as devicePing, ospfRouterId } from './l3.js'
 import {
   renderRunningConfig, renderIpIntBrief, renderVlanBrief,
   renderCdpNeighbors, renderLldpNeighbors, renderEtherchannelSummary, renderInterfacesTrunk,
@@ -315,12 +315,16 @@ const COMMANDS = {
         return []
       },
     },
-    interface: { maxArgs: 1,
+    // IOS accepts the type and number as one token or two: "interface gi0/0"
+    // and "interface loopback 0" are both valid.
+    interface: { maxArgs: 2,
       help: 'Select an interface to configure',
       argHelp: interfaceArgHelp,
       run: (cli, a) => {
+        // "gi0/0" or "GigabitEthernet 0/0" — join, then parse. An unparseable
+        // name is a normal caret error, as it is on IOS.
         const canon = canonicalIface(a.join(''))
-        if (!canon) return ['% Invalid interface']
+        if (!canon) return cli.invalid(a.length > 1 ? a[1] : a[0])
         cli.ctx.iface = getInterface(cli.dev, canon)
         cli.mode = 'iface'
         return []
@@ -1280,7 +1284,9 @@ function showCmd(cli, a) {
         observe(cli.dev, 'ip ospf neighbor')
         return renderOspfNeighbors(cli.dev, cli.net)
       }
-      return [`Routing Process "ospf ${cli.dev.ospf?.pid ?? ''}" with ID ${cli.dev.ospf?.routerId ?? '(unset)'}`]
+      observe(cli.dev, 'ip ospf')
+      // The router ID is derived when not pinned, so report the effective one.
+      return [`Routing Process "ospf ${cli.dev.ospf?.pid ?? ''}" with ID ${ospfRouterId(cli.dev)}`]
     }
   }
   if (sub === 'ntp') {
