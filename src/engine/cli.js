@@ -883,8 +883,9 @@ function negate(cli, a) {
       const i = cli.ctx.iface
       const [wasShut, hadProto] = [i.shutdown, i.lineProtocol]
       i.shutdown = false
-      // Line protocol only comes up if the port is actually cabled.
-      i.lineProtocol = !!i.connected && (!!i.ip || cli.dev.kind === 'switch')
+      // Line protocol is a layer-2 state: cabled and not shut is up/up, whether
+      // or not the interface has an address, and regardless of address family.
+      i.lineProtocol = !!i.connected
       return logIfaceState(cli.dev, i, wasShut, hadProto)
     }
     if (name === 'ip' && 'address'.startsWith(a[1] || 'x') && a[1]) { cli.ctx.iface.ip = null; cli.ctx.iface.mask = null; return [] }

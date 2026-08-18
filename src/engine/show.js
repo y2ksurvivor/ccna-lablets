@@ -179,6 +179,14 @@ function renderAclEntry(e) {
   return `${e.action} ${aclAddr(e.src)}`
 }
 
+// In `show access-lists` IOS pads the action and, for a standard list, prints a
+// host entry as a bare address with no "host" keyword.
+function showAclEntry(e) {
+  if (e.kind === 'extended') return `${e.action} ${e.proto} ${aclAddr(e.src)} ${aclAddr(e.dst)}`
+  const src = aclAddr(e.src).replace(/^host /, '')
+  return `${e.action.padEnd(6)} ${src}`
+}
+
 // IOS pads this table to fixed widths and prints the full interface name, not
 // the abbreviation — so the columns line up whatever the interface is called.
 const BRIEF_COLS = [27, 16, 4, 7, 22]
@@ -251,6 +259,21 @@ export function renderInterfaces(dev, filter = null) {
   return out
 }
 
+// IOS derives a link-local address from the MAC using modified EUI-64 as soon as
+// IPv6 is enabled on an interface, and lists it before any global address.
+export function linkLocalFromMac(mac) {
+  const hex = String(mac).replace(/[.:-]/g, '')
+  if (hex.length !== 12) return null
+  const b = hex.match(/../g).map(h => parseInt(h, 16))
+  b[0] ^= 0x02 // flip the universal/local bit
+  const eui = [b[0], b[1], b[2], 0xff, 0xfe, b[3], b[4], b[5]]
+  const groups = []
+  for (let i = 0; i < 8; i += 2) {
+    groups.push(((eui[i] << 8) | eui[i + 1]).toString(16))
+  }
+  return `FE80::${groups.join(':').toUpperCase()}`
+}
+
 export function renderIpv6Route(dev, net) {
   if (!dev.ipv6Routing && !(dev.ipv6Routes || []).length) return ['% IPv6 routing not enabled']
   const table = routingTableV6(net, dev)
@@ -278,9 +301,15 @@ export function renderIpv6IntBrief(dev) {
   for (const ifc of Object.values(dev.interfaces)) {
     const status = ifc.shutdown ? 'administratively down' : (ifc.lineProtocol ? 'up' : 'down')
     const proto = ifc.lineProtocol && !ifc.shutdown ? 'up' : 'down'
-    out.push(`${ifc.name.padEnd(22)} [${status}/${proto}]`)
-    for (const a of (ifc.ipv6 || [])) out.push(`    ${a.split('/')[0]}`)
-    if (!(ifc.ipv6 || []).length) out.push('    unassigned')
+    out.push(`${ifc.name.padEnd(26)} [${status}/${proto}]`)
+    const addrs = ifc.ipv6 || []
+    if (addrs.length) {
+      const ll = linkLocalFromMac(ifc.mac)
+      if (ll) out.push(`    ${ll}`)
+      for (const a of addrs) out.push(`    ${a.split('/')[0]}`)
+    } else {
+      out.push('    unassigned')
+    }
   }
   if (!out.length) out.push('(no interfaces)')
   return out
@@ -425,9 +454,11 @@ export function renderIpRoute(dev, net) {
     const prefix = `${r.prefix}/${len}`
     if (r.connected) {
       const ifc = getInterface(dev, r.iface)
-      out.push(`C        ${prefix} is directly connected, ${ifc ? ifc.shortName : r.iface}`)
+      out.push(`${'C'.padEnd(9)}${prefix} is directly connected, ${ifc ? ifc.name : r.iface}`)
     } else {
-      out.push(`${r.proto}        ${prefix} [${r.ad}/${r.metric}] via ${r.nextHop}`)
+      // A default route is a candidate default, which IOS marks with *.
+      const code = r.netInt === 0 && r.maskInt === 0 ? `${r.proto}*` : r.proto
+      out.push(`${code.padEnd(9)}${prefix} [${r.ad}/${r.metric}] via ${r.nextHop}`)
     }
   }
   if (table.length === 0) out.push('(routing table is empty)')
@@ -453,7 +484,7 @@ export function renderAccessLists(dev) {
   for (const [id, entries] of Object.entries(dev.acls || {})) {
     const type = parseInt(id, 10) <= 99 ? 'Standard' : 'Extended'
     out.push(`${type} IP access list ${id}`)
-    entries.forEach((e, i) => out.push(`    ${(i + 1) * 10} ${renderAclEntry(e)}`))
+    entries.forEach((e, i) => out.push(`    ${(i + 1) * 10} ${showAclEntry(e)}`))
   }
   if (!out.length) out.push('(no access lists configured)')
   return out
@@ -465,13 +496,21 @@ export function renderPortSecurity(dev) {
     '                 (Count)       (Count)         (Count)',
     '----------------------------------------------------------------------------',
   ]
-  let any = false
-  for (const ifc of Object.values(dev.interfaces)) {
-    if (!ifc.portSecurity?.enabled) continue
-    any = true
-    out.push(`${ifc.shortName.padEnd(12)} ${String(ifc.portSecurity.maximum).padEnd(14)} 0            0                  ${ifc.portSecurity.violation}`)
+  // IOS right-aligns these columns and title-cases the violation action.
+  const rows = Object.values(dev.interfaces).filter(i => i.portSecurity?.enabled)
+  for (const ifc of rows) {
+    const action = ifc.portSecurity.violation
+    const shown = action.charAt(0).toUpperCase() + action.slice(1)
+    out.push(
+      ifc.shortName.padStart(13) +
+      String(ifc.portSecurity.maximum).padStart(11) +
+      '0'.padStart(13) +
+      '0'.padStart(19) +
+      shown.padStart(18))
   }
-  if (!any) out.push('(no ports have port-security enabled)')
+  out.push('----------------------------------------------------------------------------')
+  out.push(`Total Addresses in System (excluding one mac per port)     : 0`)
+  out.push(`Max Addresses limit in System (excluding one mac per port) : 4096`)
   return out
 }
 
