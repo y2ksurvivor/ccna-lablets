@@ -23,7 +23,7 @@ import {
   renderInterfaces,
   renderIpRoute, renderOspfNeighbors,
   renderIpSsh, renderNtpStatus, renderNtpAssociations, renderNatTranslations,
-  renderAccessLists, renderPortSecurity, renderIpv6IntBrief, renderIpv6Route,
+  renderAccessLists, renderPortSecurity, renderIpv6IntBrief, renderIpv6Route, renderVersion,
 } from './show.js'
 
 export class CLI {
@@ -68,6 +68,9 @@ export class CLI {
     // so prompt() would report the short "SW1#" while the terminal actually
     // echoed "SW1(config)#" — the caret has to line up with what was echoed.
     this.promptAtLine = this.prompt()
+    // Each command nudges the device's uptime along, so `show version` reports
+    // something plausible without reading a clock.
+    if (raw !== '') this.dev.uptimeSeconds = (this.dev.uptimeSeconds || 0) + 2
 
     // A pending password consumes the whole line verbatim — it is not parsed as
     // a command, and an empty line is a failed attempt, exactly as on IOS.
@@ -1338,7 +1341,7 @@ function showCmd(cli, a) {
     observe(cli.dev, 'etherchannel summary')
     return renderEtherchannelSummary(cli.dev, cli.net)
   }
-  if ('version'.startsWith(sub)) return ['Cisco IOS Software (CCNA Lablets simulated), Version 15.x', `${cli.dev.hostname} uptime is 0 minutes`]
+  if ('version'.startsWith(sub)) { observe(cli.dev, 'version'); return renderVersion(cli.dev) }
   // Mark the deepest token reached: `show ip bogus` should flag "bogus", not "ip".
   return cli.invalid(KNOWN_SHOW_ROOTS.has(sub) && a[1] ? a[1] : a[0])
 }

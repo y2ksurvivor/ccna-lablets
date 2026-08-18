@@ -571,6 +571,60 @@ export function renderPortSecurity(dev) {
   return out
 }
 
+// show version. Structured like the real thing so the fields a learner is asked
+// to find are all present — version, uptime, system image, interface inventory
+// and the configuration register — but it identifies itself as the simulator
+// rather than impersonating a licensed Cisco image.
+export function renderVersion(dev) {
+  const isSwitch = dev.kind === 'switch'
+  // The hardware inventory lists physical ports only — a loopback or SVI is
+  // virtual and does not appear here.
+  const VIRTUAL = new Set(['Loopback', 'Vlan'])
+  const counts = new Map()
+  for (const ifc of Object.values(dev.interfaces)) {
+    const type = ifc.name.replace(/[\d/.]+$/, '')
+    if (VIRTUAL.has(type)) continue
+    counts.set(type, (counts.get(type) || 0) + 1)
+  }
+  const label = {
+    GigabitEthernet: 'Gigabit Ethernet',
+    FastEthernet: 'FastEthernet',
+    Ethernet: 'Ethernet',
+    Loopback: 'Loopback',
+    Serial: 'Serial',
+    Vlan: 'Virtual Ethernet',
+  }
+  // Uptime advances with work done on the device rather than the wall clock, so
+  // output stays reproducible for tests while still looking alive.
+  const mins = Math.floor((dev.uptimeSeconds || 0) / 60)
+
+  const out = [
+    `CCNA Lablets IOS simulator, ${isSwitch ? 'switch' : 'router'} personality, Version 15.2`,
+    'Not Cisco software — a teaching simulator that mimics IOS command behaviour.',
+    '',
+    `ROM: Simulated bootstrap, Version 15.2`,
+    '',
+    `${dev.hostname} uptime is ${mins} minute${mins === 1 ? '' : 's'}`,
+    'System returned to ROM by power-on',
+    `System image file is "flash0:ccna-lablets-${isSwitch ? 'switch' : 'router'}-15.2.bin"`,
+    'Last reload type: Normal Reload',
+    '',
+    isSwitch
+      ? 'Simulated WS-C2960-24TT-L (revision B0) with 65536K bytes of memory.'
+      : 'Simulated CISCO2911/K9 (revision 1.0) with 491520K/32768K bytes of memory.',
+    `Processor board ID SIM-${dev.hostname}`,
+  ]
+  for (const [type, n] of counts) {
+    out.push(`${n} ${label[type] || type} interface${n === 1 ? '' : 's'}`)
+  }
+  out.push(
+    '255K bytes of non-volatile configuration memory.',
+    '',
+    'Configuration register is 0x2102',
+  )
+  return out
+}
+
 export function renderIpSsh(dev) {
   if (!dev.rsaKey) {
     return ['SSH Disabled - version 2.0', '%Please create RSA keys (of at least 768 bits) to enable SSH.']

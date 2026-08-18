@@ -136,3 +136,54 @@ describe('show ip interface brief', () => {
     expect(text).toMatch(/GigabitEthernet0\/0 +unassigned +YES unset +up +up/)
   })
 })
+
+describe('show version', () => {
+  const version = (id, dev, setup = []) =>
+    out(id, dev, ['enable', ...setup], 'show version')
+
+  it('reports the fields a learner is sent looking for', () => {
+    const text = version('ospf', 'R1').join('\n')
+    expect(text).toMatch(/uptime is \d+ minutes?/)
+    expect(text).toContain('System image file is')
+    expect(text).toContain('Configuration register is 0x2102')
+    expect(text).toMatch(/bytes of memory/)
+    expect(text).toContain('bytes of non-volatile configuration memory')
+  })
+
+  it('says plainly that it is not Cisco software', () => {
+    const text = version('ospf', 'R1').join('\n')
+    expect(text).toContain('Not Cisco software')
+    expect(text).not.toMatch(/Copyright \(c\).*Cisco Systems/)
+  })
+
+  it('reports a switch personality on a switch', () => {
+    expect(version('vlan-basics', 'SW1').join('\n')).toMatch(/switch personality/)
+    expect(version('ospf', 'R1').join('\n')).toMatch(/router personality/)
+  })
+
+  it('counts physical interfaces from the device', () => {
+    // ospf R1 has two Gigabit ports in this topology.
+    expect(version('ospf', 'R1').join('\n')).toMatch(/^2 Gigabit Ethernet interfaces$/m)
+  })
+
+  it('leaves virtual interfaces out of the hardware inventory', () => {
+    const text = version('ospf', 'R1', ['conf t', 'interface loopback 0',
+      'ip address 1.1.1.1 255.255.255.255', 'end']).join('\n')
+    expect(text).not.toMatch(/Loopback interface/)
+    expect(text).toMatch(/^2 Gigabit Ethernet interfaces$/m)
+  })
+
+  it('uptime advances with work rather than a clock, so it stays reproducible', () => {
+    const cli = getScenario('ospf').build().consoles.R1
+    cli.execute('enable')
+    const first = cli.execute('show version').find(l => l.includes('uptime'))
+    for (let i = 0; i < 40; i++) cli.execute('show clock')
+    const later = cli.execute('show version').find(l => l.includes('uptime'))
+    expect(first).toContain('0 minutes')
+    expect(later).not.toContain('0 minutes')
+  })
+
+  it('abbreviates as sh ver', () => {
+    expect(version('ospf', 'R1')[0]).toBe(out('ospf', 'R1', ['enable'], 'sh ver')[0])
+  })
+})
