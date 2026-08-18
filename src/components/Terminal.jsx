@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 // device keeps its own buffer across tab switches. Local state is just the
 // current input line and history cursor. Handles Enter, Up/Down, Tab, and the
 // IOS behavior of redisplaying the typed line after a `?` query.
-export default function Terminal({ prompt, lines, history, onSubmit, complete }) {
+export default function Terminal({ prompt, lines, history, onSubmit, complete, masked = false }) {
   const [input, setInput] = useState('')
   const [histIdx, setHistIdx] = useState(-1)
   const inputRef = useRef(null)
@@ -53,10 +53,13 @@ export default function Terminal({ prompt, lines, history, onSubmit, complete })
           <input
             ref={inputRef}
             className="term-input"
+            /* IOS echoes nothing while a password is being typed. */
+            type={masked ? 'password' : 'text'}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             spellCheck={false}
+            autoComplete="off"
             autoFocus
           />
         </div>

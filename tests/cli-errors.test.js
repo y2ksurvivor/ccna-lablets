@@ -671,3 +671,80 @@ describe('passwords in running-config (blueprint 5.3)', () => {
     expect(decode(type7('conpass'))).toBe('conpass')
   })
 })
+
+describe('enable challenges for a password when one is configured', () => {
+  const r1 = (setup = []) => {
+    const sim = getScenario('device-hardening').build()
+    const cli = sim.consoles.R1
+    for (const c of setup) cli.execute(c)
+    return { sim, cli }
+  }
+  const withSecret = () => r1(['enable', 'conf t', 'enable secret cisco123', 'end', 'disable'])
+
+  it('goes straight to privileged EXEC when nothing is configured', () => {
+    const { cli } = r1()
+    expect(cli.execute('enable')).toEqual([])
+    expect(cli.prompt()).toBe('R1#')
+    expect(cli.masked).toBe(false)
+  })
+
+  it('prompts once a secret exists, and masks the input', () => {
+    const { cli } = withSecret()
+    expect(cli.execute('enable')).toEqual([])
+    expect(cli.prompt()).toBe('Password: ')
+    expect(cli.masked).toBe(true)
+  })
+
+  it('accepts the secret and clears the prompt', () => {
+    const { cli } = withSecret()
+    cli.execute('enable')
+    expect(cli.execute('cisco123')).toEqual([])
+    expect(cli.prompt()).toBe('R1#')
+    expect(cli.masked).toBe(false)
+  })
+
+  it.each([['letmein'], ['']])('denies %s and returns to user EXEC', (attempt) => {
+    const { cli } = withSecret()
+    cli.execute('enable')
+    expect(cli.execute(attempt)).toEqual(['% Access denied'])
+    expect(cli.prompt()).toBe('R1>')
+    expect(cli.masked).toBe(false)
+  })
+
+  it('lets you retry without limit', () => {
+    const { cli } = withSecret()
+    for (let i = 0; i < 3; i++) {
+      cli.execute('enable')
+      expect(cli.execute('wrong')).toEqual(['% Access denied'])
+    }
+    cli.execute('enable')
+    cli.execute('cisco123')
+    expect(cli.prompt()).toBe('R1#')
+  })
+
+  it('treats the password line verbatim, not as a command', () => {
+    const { cli, sim } = withSecret()
+    cli.execute('enable')
+    // A password that looks like a command must not be executed as one.
+    expect(cli.execute('conf t')).toEqual(['% Access denied'])
+    expect(cli.prompt()).toBe('R1>')
+    expect(sim.net.devices.R1.hostname).toBe('R1')
+  })
+
+  it('falls back to the enable password when no secret is set', () => {
+    const { cli } = r1(['enable', 'conf t', 'enable password letmein', 'end', 'disable'])
+    cli.execute('enable')
+    expect(cli.execute('letmein')).toEqual([])
+    expect(cli.prompt()).toBe('R1#')
+  })
+
+  it('ignores the weaker password when a secret exists', () => {
+    const { cli } = r1(['enable', 'conf t', 'enable password letmein',
+      'enable secret cisco123', 'end', 'disable'])
+    cli.execute('enable')
+    expect(cli.execute('letmein')).toEqual(['% Access denied'])
+    cli.execute('enable')
+    expect(cli.execute('cisco123')).toEqual([])
+    expect(cli.prompt()).toBe('R1#')
+  })
+})

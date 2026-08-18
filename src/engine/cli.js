@@ -34,7 +34,14 @@ export class CLI {
     this.ctx = {} // sub-config context (e.g. current interface)
   }
 
+  // True while the CLI is waiting for a password rather than a command. The UI
+  // reads this to mask the field and to echo the prompt without the keystrokes.
+  get masked() {
+    return this.pending?.kind === 'password'
+  }
+
   prompt() {
+    if (this.pending?.kind === 'password') return 'Password: '
     const h = this.dev.hostname
     switch (this.mode) {
       case 'user': return `${h}>`
@@ -61,6 +68,14 @@ export class CLI {
     // so prompt() would report the short "SW1#" while the terminal actually
     // echoed "SW1(config)#" — the caret has to line up with what was echoed.
     this.promptAtLine = this.prompt()
+
+    // A pending password consumes the whole line verbatim — it is not parsed as
+    // a command, and an empty line is a failed attempt, exactly as on IOS.
+    if (this.pending?.kind === 'password') {
+      const { onEntry } = this.pending
+      this.pending = null
+      return onEntry(line.replace(/\r?\n$/, ''))
+    }
     if (raw === '') return []
     if (raw === '?') return formatHelp(this.helpTokens([]))
 
@@ -220,7 +235,25 @@ const COMMANDS = {
   user: {
     enable: {
       help: 'Turn on privileged commands',
-      run: (cli) => { cli.mode = 'enable'; return [] },
+      run: (cli) => {
+        // No credential configured: the console drops straight into privileged
+        // EXEC, which is exactly why an unconfigured device is wide open.
+        if (!cli.dev.enableSecret && !cli.dev.enablePassword) {
+          cli.mode = 'enable'
+          return []
+        }
+        cli.pending = {
+          kind: 'password',
+          onEntry: (entered) => {
+            // A configured secret always wins; the weaker password is only
+            // consulted when no secret exists.
+            const expected = cli.dev.enableSecret || cli.dev.enablePassword
+            if (entered === expected) { cli.mode = 'enable'; return [] }
+            return ['% Access denied']
+          },
+        }
+        return []
+      },
     },
     ping: { help: 'Send echo messages', argHelp: pingArgHelp, run: (cli, a) => pingCmd(cli, a) },
     show: { help: 'Show running system information', argHelp: showArgHelp, run: (cli, a) => showCmd(cli, a) },

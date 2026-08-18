@@ -45,7 +45,9 @@ export default function App() {
 
   const runCommand = useCallback((devId, cmd) => {
     const cli = sim.consoles[devId]
-    const echoed = `${cli.prompt()}${cmd}`
+    // A password line is never echoed back — only the prompt that asked for it.
+    const wasMasked = cli.masked
+    const echoed = wasMasked ? cli.prompt() : `${cli.prompt()}${cmd}`
     let out = []
     try {
       out = cli.execute(cmd)
@@ -53,7 +55,8 @@ export default function App() {
       out = [`% engine error: ${e.message}`]
     }
     setBuffers(b => ({ ...b, [devId]: [...b[devId], echoed, ...out] }))
-    if (cmd.trim() && !cmd.trim().endsWith('?')) {
+    // Passwords must not land in the recallable command history either.
+    if (cmd.trim() && !cmd.trim().endsWith('?') && !wasMasked) {
       setHistories(h => ({ ...h, [devId]: [...h[devId], cmd] }))
     }
     const newResults = grade(scenario, sim.net)
@@ -140,7 +143,8 @@ export default function App() {
             lines={buffers[active]}
             history={histories[active]}
             onSubmit={cmd => runCommand(active, cmd)}
-            complete={cli.complete ? (line => cli.complete(line)) : null}
+            complete={cli.complete && !cli.masked ? (line => cli.complete(line)) : null}
+            masked={!!cli.masked}
           />
         </div>
 
